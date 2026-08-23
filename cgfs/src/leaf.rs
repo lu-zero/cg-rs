@@ -6,6 +6,9 @@ use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
+use rustix::fs::chown;
+use rustix::process::{Gid, Uid};
+
 use crate::CONTROL_FILES;
 
 /// One leaf to create under the mount point, with resolved numeric owners.
@@ -113,28 +116,13 @@ fn write(path: impl AsRef<Path>, body: impl AsRef<[u8]>) -> io::Result<()> {
 }
 
 fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
-    let c = cstring(path)?;
-    // -1 keeps the current value; 0o777… impossible for ids so map None → -1.
-    let uid = uid.map_or(libc::uid_t::MAX, |u| u as libc::uid_t);
-    let gid = gid.map_or(libc::gid_t::MAX, |g| g as libc::gid_t);
-    let rc = unsafe { libc::chown(c.as_ptr(), uid, gid) };
-    if rc == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
+    chown(path, uid.map(Uid::from_raw), gid.map(Gid::from_raw)).map_err(io::Error::from)
 }
 
 fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(mode);
     fs::set_permissions(path, perms)
-}
-
-fn cstring(path: &Path) -> io::Result<std::ffi::CString> {
-    use std::os::unix::ffi::OsStrExt;
-    std::ffi::CString::new(path.as_os_str().as_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))
 }
 
 #[cfg(test)]
@@ -146,8 +134,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("cg");
         // chown to *self* works unprivileged; euid/egid keep the test honest.
-        let uid = unsafe { libc::geteuid() } as u32;
-        let gid = unsafe { libc::getegid() } as u32;
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
 
         let leaf_rel = "users/lu_zero/session";
         let spec = LeafSpec {

@@ -18,6 +18,17 @@ lscgroup/lssubsys/cgexec/cgclassify/cgsnapshot), `cgrulesd`
 Not reproduced on purpose: v1 multi-hierarchy mounting, Python bindings,
 release_agent plumbing.
 
+## Development
+
+```text
+just --list      # recipes
+just ci          # fmt + clippy + doc + test (the pre-commit gate set)
+just install     # PAM module ($libdir/security) + CLI, like libcgroup's make install
+```
+
+`install` needs [cargo-c](https://crates.io/crates/cargo-c) for the module
+(`cargo install cargo-c`). Override `just install prefix=/usr/local libdir=lib`.
+
 ```text
 /sys/fs/cgroup/users/$USER            # empty, subtree_control, user-owned
 /sys/fs/cgroup/users/$USER/session    # login pid (pam_cgroup)

@@ -43,7 +43,7 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   Depends on winnow and protocol-only miette (`default-features = false`;
   dev-deps add `fancy-no-backtrace` for rendered-output tests).
 - `cgfs/` — cgroupfs v2 write side: apply/delete/walk/raw control files.
-  libc-only, Linux-gated.
+  rustix-backed, Linux-gated (statfs-verified mounts).
 - `pam_cgroup/` — PAM module (cdylib via cargo-c, `panic=abort` in capi
   metadata) + `pam-cgroup` CLI. Consumes `cgfs`; TOML config is its own.
 

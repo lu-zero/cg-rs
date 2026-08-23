@@ -3,23 +3,39 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
+use rustix::fs::statfs;
+
 /// Conventional mount point, used when mountinfo says nothing.
 pub const DEFAULT_MOUNT: &str = "/sys/fs/cgroup";
 
+/// `statfs(2)` superblock magic for cgroup2; a stable kernel ABI value
+/// (linux-raw-sys carries it, rustix does not re-export it).
+const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
+
+/// True when `path` lives on a cgroup2 filesystem (verified via
+/// `statfs(2)`, not just file presence).
+pub(crate) fn is_cgroup2(path: &Path) -> bool {
+    matches!(statfs(path), Ok(st) if st.f_type == CGROUP2_SUPER_MAGIC)
+}
+
 /// Find the cgroup2 unified hierarchy mount point.
 ///
-/// Reads `/proc/self/mountinfo` first (handles non-standard mounts), then
-/// falls back to [`DEFAULT_MOUNT`] if it looks like a cgroup2 root.
+/// Reads `/proc/self/mountinfo` first (handles non-standard mounts, each
+/// candidate verified by superblock magic), then falls back to
+/// [`DEFAULT_MOUNT`] if it really is a cgroup2 filesystem.
 pub fn find_mount() -> io::Result<PathBuf> {
     if let Ok(text) = std::fs::read_to_string("/proc/self/mountinfo") {
         for line in text.lines() {
             if let Some(mp) = parse_mountinfo_line(line) {
-                return Ok(mp);
+                // mountinfo says cgroup2; statfs confirms it is.
+                if is_cgroup2(&mp) {
+                    return Ok(mp);
+                }
             }
         }
     }
     let fallback = PathBuf::from(DEFAULT_MOUNT);
-    if fallback.join("cgroup.controllers").is_file() {
+    if fallback.join("cgroup.controllers").is_file() && is_cgroup2(&fallback) {
         return Ok(fallback);
     }
     Err(io::Error::new(
@@ -110,8 +126,17 @@ mod tests {
     fn find_mount_succeeds_or_is_clean_not_found() {
         // Either we are on a v2 system or we get a clean NotFound.
         match find_mount() {
-            Ok(m) => assert!(m.is_absolute()),
+            Ok(m) => {
+                assert!(m.is_absolute());
+                assert!(is_cgroup2(&m), "returned mount verified by statfs");
+            }
             Err(e) => assert_eq!(e.kind(), io::ErrorKind::NotFound),
         }
+    }
+
+    #[test]
+    fn tmpfs_is_not_cgroup2() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(!is_cgroup2(tmp.path()));
     }
 }

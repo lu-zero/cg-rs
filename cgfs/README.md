@@ -5,7 +5,7 @@
 [![docs.rs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs)
 
 cgroupfs **v2** management primitives — the *write* half of the cgroup
-filesystem. libc-only, no controller opinions.
+filesystem. rustix-backed, no controller opinions.
 
 Companion to [`cgconfig`](../cgconfig) (parsers for the legacy libcgroup
 formats) and the read/stats crates (`below/cgroupfs`, `cgroups-rs`).
