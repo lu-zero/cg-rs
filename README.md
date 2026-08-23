@@ -31,6 +31,13 @@ just install     # PAM module ($libdir/security) + CLI, like libcgroup's make in
 `install` needs [cargo-c](https://crates.io/crates/cargo-c) for the module
 (`cargo install cargo-c`). Override `just install prefix=/usr/local libdir=lib`.
 
+## Releasing
+
+`./publish.sh` walks the workspace in dependency order, skipping versions
+already on crates.io; `--dry-run` packages without uploading (dependents
+naturally stop at the first unpublished dependency), `--fast` skips the
+gate set.
+
 ```text
 /sys/fs/cgroup/users/$USER            # empty, subtree_control, user-owned
 /sys/fs/cgroup/users/$USER/session    # login pid (pam_cgroup)
