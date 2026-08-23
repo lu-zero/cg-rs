@@ -48,6 +48,9 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   metadata) + `pam-cgroup` CLI. Consumes `cgfs`; TOML config is its own.
 - `cgctl/` — busybox CLI over cgconfig+cgfs (`config`, `ls`, `get`,
   `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
+- `cgrulesd/` — poll-based enforcement of cgrules.conf; destinations
+  resolve exact group first, then template by raw rule destination;
+  existing dirs without config entry are valid targets.
 
 Shared metadata lives in `[workspace.package]`; shared deps in
 `[workspace.dependencies]`. Member manifests use `workspace = true`
@@ -59,8 +62,8 @@ inheritance — do not re-pin versions locally.
   hierarchies, no systemd D-Bus, no release_agent.
 - `miette` stays renderer-free at the library level: binaries opt into
   `features = ["fancy"]`.
-- Roadmap: `cgrulesd` (cgrules enforcement daemon). Do not start it
-  inside an unrelated commit.
+- Roadmap: netlink proc-connector for cgrulesd (polling today).
+  Do not start new crates inside an unrelated commit.
 
 ## Commits
 

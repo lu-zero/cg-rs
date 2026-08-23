@@ -1,0 +1,22 @@
+[package]
+name = "cgrulesd"
+description = "cgrules.conf enforcement daemon for cgroup v2 (poll-based cgred successor)"
+keywords = ["cgroup", "cgroupv2", "pam", "daemon"]
+categories = ["os::unix-apis", "command-line-utilities"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cgrulesd"
+path = "src/main.rs"
+
+[dependencies]
+cgconfig = { workspace = true }
+cgfs = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
