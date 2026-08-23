@@ -41,8 +41,8 @@ pub mod cgrules;
 pub mod model;
 pub mod v2;
 
-pub use cgconfig::{parse_cgconfig, CgError};
-pub use cgrules::{parse_cgrules, CrError};
+pub use cgconfig::{parse_cgconfig, parse_cgconfig_in, CgError};
+pub use cgrules::{parse_cgrules, parse_cgrules_in, CrError};
 pub use model::{
     first_rule, ConfigFile, Controllers, Identity, Mount, Node, Perm, PermSet, Rule, Subject,
     Template, Var,

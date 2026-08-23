@@ -14,35 +14,93 @@ use winnow::token::{one_of, take_while};
 
 use crate::model::{Controllers, Rule, Subject, Template};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// Rule failure with byte span, position, and (through
+/// [`parse_cgrules_in`]) the named source for [miette] rendering.
+///
+/// [miette]: https://docs.rs/miette
+#[derive(Clone, Debug)]
 pub struct CrError {
     pub line: usize,
+    pub column: usize,
+    /// Byte span of the offending rule line, trimmed.
+    pub offset: usize,
+    pub end: usize,
     pub msg: String,
+    /// Boxed to keep `Result<_, CrError>` small.
+    source: Option<Box<miette::NamedSource<String>>>,
 }
 
 impl std::fmt::Display for CrError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.line, self.msg)
+        write!(f, "{}:{}: {}", self.line, self.column, self.msg)
     }
 }
 
 impl std::error::Error for CrError {}
 
+impl miette::Diagnostic for CrError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new("cgconfig::rules"))
+    }
+
+    fn severity(&self) -> Option<miette::Severity> {
+        Some(miette::Severity::Error)
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        self.source.as_deref().map(|s| s as &dyn miette::SourceCode)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        let label = self.msg.lines().next().unwrap_or("invalid rule");
+        Some(Box::new(
+            [miette::LabeledSpan::at(self.offset..self.end, label)].into_iter(),
+        ))
+    }
+}
+
 /// Parse a complete cgrules.conf document.
+///
+/// The error carries no source text; use [`parse_cgrules_in`] if you want
+/// miette snippets with the input attached.
 pub fn parse_cgrules(text: &str) -> Result<Vec<Rule>, CrError> {
+    parse_cgrules_in("cgrules.conf", text)
+}
+
+/// Like [`parse_cgrules`] but attaches the source under `name` so
+/// `miette::Diagnostic::source_code` renders named snippets.
+pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, CrError> {
+    let source = Box::new(miette::NamedSource::new(name, text.to_owned()));
     let mut rules: Vec<Rule> = Vec::new();
-    for (n, raw) in text.lines().enumerate() {
+    let mut byte_offset = 0usize;
+    for (n, raw) in text.split_inclusive('\n').enumerate() {
         let line_no = n + 1;
-        let line = raw.trim_start();
-        if line.is_empty() || line.starts_with('#') {
+        let line_start = byte_offset;
+        byte_offset += raw.len();
+
+        let indent = raw.len() - raw.trim_start().len();
+        let content_start = line_start + indent;
+        let content = raw.trim();
+        if content.is_empty() || content.starts_with('#') {
             continue;
         }
-        let toks: Vec<&str> = line.split_whitespace().collect();
-        if toks.len() < 3 {
-            return Err(CrError {
+        // Span of the trimmed rule text, for error labels.
+        let (span_start, span_end) = (content_start, content_start + content.trim_end().len());
+        let err = |msg: String| {
+            let head = &text[..span_start];
+            CrError {
                 line: line_no,
-                msg: format!("need at least 3 fields, got {}", toks.len()),
-            });
+                column: head.chars().rev().take_while(|&c| c != '\n').count() + 1,
+                offset: span_start,
+                end: span_end,
+                msg,
+                source: Some(source.clone()),
+            }
+        };
+
+        let toks: Vec<&str> = content.split_whitespace().collect();
+        if toks.len() < 3 {
+            return Err(err(format!("need at least 3 fields, got {}", toks.len())));
         }
 
         let (subject_tok, process) = match toks[0].split_once(':') {
@@ -54,10 +112,9 @@ pub fn parse_cgrules(text: &str) -> Result<Vec<Rule>, CrError> {
             match rules.last() {
                 Some(prev) => prev.subject.clone(),
                 None => {
-                    return Err(CrError {
-                        line: line_no,
-                        msg: "`%` ditto on the first rule has nothing to repeat".into(),
-                    })
+                    return Err(err(
+                        "`%` ditto on the first rule has nothing to repeat".into()
+                    ))
                 }
             }
         } else {
@@ -69,10 +126,7 @@ pub fn parse_cgrules(text: &str) -> Result<Vec<Rule>, CrError> {
         } else {
             let list: Vec<String> = toks[1].split(',').map(str::to_owned).collect();
             if list.iter().any(String::is_empty) {
-                return Err(CrError {
-                    line: line_no,
-                    msg: format!("bad controller list {:?}", toks[1]),
-                });
+                return Err(err(format!("bad controller list {:?}", toks[1])));
             }
             Controllers::List(list)
         };
@@ -81,10 +135,11 @@ pub fn parse_cgrules(text: &str) -> Result<Vec<Rule>, CrError> {
             subject,
             process,
             controllers,
-            destination: Template(dest_token.parse(toks[2]).map_err(|_| CrError {
-                line: line_no,
-                msg: format!("bad destination {:?}", toks[2]),
-            })?),
+            destination: Template(
+                dest_token
+                    .parse(toks[2])
+                    .map_err(|_| err(format!("bad destination {:?}", toks[2])))?,
+            ),
             options: toks[3..].iter().map(|s| unescape(s)).collect(),
         });
     }

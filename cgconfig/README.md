@@ -25,4 +25,26 @@ assert_eq!(leaf.path, "users/laura");
 Empty controller blocks (`cpu {}`) count: under the unified hierarchy they
 still mean "enable this controller for children".
 
+## Errors are `miette::Diagnostic`
+
+Both error types carry byte spans, line/column, and a named copy of the
+source (`parse_cgconfig_in("my.conf", text)` to name it yourself), so
+consumers can render rich diagnostics:
+
+```rust
+use cgconfig::parse_cgconfig_in;
+use miette::GraphicalReportHandler;
+
+let err = parse_cgconfig_in("cgconfig.conf", "group x { cpu { a = ; } }")
+    .unwrap_err();
+let mut out = String::new();
+GraphicalReportHandler::new()
+    .render_report(&mut out, &err)
+    .unwrap();
+```
+
+The library depends on `miette` with `default-features = false` (protocol
+types only); enable `miette/features = ["fancy"]` in your binary for the
+renderer. Try `cargo run --example render_error`.
+
 License: MIT OR Apache-2.0.

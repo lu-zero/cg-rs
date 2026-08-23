@@ -11,6 +11,12 @@ categories = ["parser-implementations", "os::unix-apis"]
 
 [dependencies]
 winnow = "1"
+# Core protocol only (Diagnostic, LabeledSpan, NamedSource); no derive,
+# no renderer. Consumers opt into `miette/features = ["fancy"]` themselves.
+miette = { version = "7", default-features = false }
+
+[dev-dependencies]
+miette = { version = "7", features = ["fancy-no-backtrace"] }
 
 [package.metadata.docs.rs]
 all-features = true

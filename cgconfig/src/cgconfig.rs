@@ -18,13 +18,21 @@ use winnow::token::{take_till, take_while};
 
 use crate::model::{ConfigFile, Mount, Node, Perm, PermSet};
 
-/// Parse failure location plus the underlying message.
+/// Parse failure with byte span, position, and (when parsing through the
+/// `_in` constructors) the named source text for [miette] rendering.
+///
+/// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]
 pub struct CgError {
+    /// Byte offset where parsing stopped.
     pub offset: usize,
+    /// One past the last byte of the offending token.
+    pub end: usize,
     pub line: usize,
     pub column: usize,
     pub msg: String,
+    /// Boxed to keep `Result<_, CgError>` small.
+    source: Option<Box<miette::NamedSource<String>>>,
 }
 
 impl std::fmt::Display for CgError {
@@ -35,20 +43,81 @@ impl std::fmt::Display for CgError {
 
 impl std::error::Error for CgError {}
 
-/// Parse a complete cgconfig.conf document.
+impl miette::Diagnostic for CgError {
+    fn code<'a>(&'a self) -> Option<Box<dyn std::fmt::Display + 'a>> {
+        Some(Box::new("cgconfig::parse"))
+    }
+
+    fn severity(&self) -> Option<miette::Severity> {
+        Some(miette::Severity::Error)
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        self.source.as_deref().map(|s| s as &dyn miette::SourceCode)
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        // First line of `msg` as the caret label, the rest becomes `help`.
+        let label = self.msg.lines().next().unwrap_or("parse error");
+        Some(Box::new(
+            [miette::LabeledSpan::at(self.offset..self.end, label)].into_iter(),
+        ))
+    }
+
+    fn help(&self) -> Option<Box<dyn std::fmt::Display + '_>> {
+        let rest: Vec<&str> = self.msg.lines().skip(1).collect();
+        if rest.is_empty() {
+            None
+        } else {
+            Some(Box::new(rest.join("\n")))
+        }
+    }
+}
+
+/// Parse a complete cgconfig.conf document. The attached source is named
+/// `"cgconfig.conf"`; use [`parse_cgconfig_in`] to name it yourself.
 pub fn parse_cgconfig(text: &str) -> Result<ConfigFile, CgError> {
+    parse_cgconfig_in("cgconfig.conf", text)
+}
+
+/// Like [`parse_cgconfig`] but names the attached source for
+/// `miette::Diagnostic::source_code` rendering.
+pub fn parse_cgconfig_in(name: impl AsRef<str>, text: &str) -> Result<ConfigFile, CgError> {
+    let source = Box::new(miette::NamedSource::new(name, text.to_owned()));
     match config_file.parse(text) {
         Ok(cfg) => Ok(cfg),
-        Err(e) => {
-            let off = e.offset().min(text.len());
-            let head = &text[..off];
-            Err(CgError {
-                offset: e.offset(),
-                line: 1 + head.matches('\n').count(),
-                column: head.chars().rev().take_while(|&c| c != '\n').count() + 1,
-                msg: e.inner().to_string(),
-            })
+        Err(e) => Err(cg_error(&source, text, e.offset(), e.inner().to_string())),
+    }
+}
+
+fn cg_error(
+    source: &miette::NamedSource<String>,
+    text: &str,
+    offset: usize,
+    msg: String,
+) -> CgError {
+    // Span of the offending token: from the error offset through any bare
+    // word chars (winnow's `ParseError::char_span`, widened); zero-width
+    // when the failure sits on structure or EOF.
+    let off = offset.min(text.len());
+    let mut end = text[off..]
+        .chars()
+        .next()
+        .map_or(off, |c| off + c.len_utf8());
+    while let Some(c) = text[end..].chars().next() {
+        if c.is_whitespace() || "{};=\"#".contains(c) {
+            break;
         }
+        end += c.len_utf8();
+    }
+    let head = &text[..off];
+    CgError {
+        offset: off,
+        end,
+        line: 1 + head.matches('\n').count(),
+        column: head.chars().rev().take_while(|&c| c != '\n').count() + 1,
+        msg,
+        source: Some(Box::new(source.clone())),
     }
 }
 
@@ -129,6 +198,8 @@ fn config_file(input: &mut &str) -> ModalResult<ConfigFile> {
 }
 
 fn section(input: &mut &str, cfg: &mut ConfigFile) -> ModalResult<()> {
+    // Remember the keyword start so an unknown section reports *at* it.
+    let kw_start = input.checkpoint();
     let kw = bare
         .context(StrContext::Label("section"))
         .parse_next(input)?;
@@ -142,13 +213,15 @@ fn section(input: &mut &str, cfg: &mut ConfigFile) -> ModalResult<()> {
             cfg.templates.push(n);
         }),
         "default" => default_section(input, cfg),
-        _ => fail
-            .context(StrContext::Label("section"))
-            .context(StrContext::Expected("`mount`".into()))
-            .context(StrContext::Expected("`group`".into()))
-            .context(StrContext::Expected("`template`".into()))
-            .context(StrContext::Expected("`default`".into()))
-            .parse_next(input),
+        _ => {
+            input.reset(&kw_start);
+            fail.context(StrContext::Label("section"))
+                .context(StrContext::Expected("`mount`".into()))
+                .context(StrContext::Expected("`group`".into()))
+                .context(StrContext::Expected("`template`".into()))
+                .context(StrContext::Expected("`default`".into()))
+                .parse_next(input)
+        }
     }
 }
 
