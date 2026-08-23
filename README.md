@@ -25,11 +25,14 @@ release_agent plumbing.
 ```text
 just --list      # recipes
 just ci          # fmt + clippy + doc + test (the pre-commit gate set)
-just install     # PAM module ($libdir/security) + CLI, like libcgroup's make install
+just install     # PAM module ($libdir/security) + CLI binaries ($prefix/bin)
 ```
 
-`install` needs [cargo-c](https://crates.io/crates/cargo-c) for the module
-(`cargo install cargo-c`). Override `just install prefix=/usr/local libdir=lib`.
+Packaging works like autotools: `DESTDIR=/tmp/stage just install` stages
+everything under the destdir without touching the live system (and skips
+sudo); `PREFIX`/`LIBDIR` override `/usr`/`lib64`. `install` needs
+[cargo-c](https://crates.io/crates/cargo-c) for the module
+(`cargo install cargo-c`).
 
 ## Releasing
 
