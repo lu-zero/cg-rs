@@ -1,0 +1,17 @@
+[workspace]
+resolver = "2"
+members = ["cgconfig", "cgfs", "pam_cgroup"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lu_zero/cg-rs"
+
+[workspace.dependencies]
+cgconfig = { path = "cgconfig" }
+cgfs = { path = "cgfs" }
+winnow = "1"
+miette = { version = "7", default-features = false }
+libc = "0.2"
