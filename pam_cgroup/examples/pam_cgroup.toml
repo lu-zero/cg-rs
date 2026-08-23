@@ -1,0 +1,27 @@
+# Login layout jobacct can mkdir a sibling leaf under.
+# PAM: session optional pam_cgroup_rs.so config=/etc/cgroup/pam_cgroup.toml
+#
+# {user} {uid} {gid} {group} expand from the PAM user (not from %u in a
+# cgconfig perm parser).
+
+mount = "/sys/fs/cgroup"
+# If true, pam_sm_open_session returns PAM_SESSION_ERR on failure.
+fail_closed = false
+
+# Delegated parent: no tasks, controllers on for children.
+[[place]]
+path = "users/{user}"
+uid = "{user}"
+gid = "{group}"
+mode = 0o775
+file_mode = 0o664
+subtree_control = ["cpu", "memory"]
+
+# Login tasks live here. jobacct mkdir's users/{user}/jobacct-* beside it.
+[[place]]
+path = "users/{user}/session"
+uid = "{user}"
+gid = "{group}"
+mode = 0o775
+file_mode = 0o664
+attach = true

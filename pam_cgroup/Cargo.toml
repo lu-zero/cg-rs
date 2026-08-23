@@ -1,0 +1,46 @@
+[package]
+name = "pam_cgroup"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "PAM session module: place the login in a delegated cgroup v2 leaf"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lu-zero/pam_cgroup"
+keywords = ["pam", "cgroup", "cgroupfs"]
+categories = ["os::unix-apis", "authentication"]
+
+[lib]
+name = "pam_cgroup_rs"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pam-cgroup"
+path = "src/main.rs"
+
+[features]
+default = []
+# Required by cargo-c so the crate is treated as a C ABI library.
+capi = []
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+cgfs = { path = "../cgfs" }
+
+# cargo cinstall --prefix=/usr --libdir=/usr/lib64
+#   $libdir/security/libpam_cgroup_rs.so  (install_subdir = plugin dir)
+[package.metadata.capi]
+min_version = "0.9.16"
+
+[package.metadata.capi.header]
+# Dynamic module: no C header.
+enabled = false
+generation = false
+
+[package.metadata.capi.library]
+name = "pam_cgroup_rs"
+install_subdir = "security"
+versioning = false
+rustflags = "-Cpanic=abort"
