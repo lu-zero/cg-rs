@@ -1,0 +1,16 @@
+[package]
+name = "cgconfig"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.74"
+description = "winnow parsers for libcgroup cgconfig.conf and cgrules.conf"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lu-zero/cgconfig"
+keywords = ["cgroup", "libcgroup", "parser", "cgconfig", "cgrules"]
+categories = ["parser-implementations", "os::unix-apis"]
+
+[dependencies]
+winnow = "1"
+
+[package.metadata.docs.rs]
+all-features = true
