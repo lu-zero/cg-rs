@@ -23,6 +23,12 @@ would only surface at login. Do not "portability-harden" this with
 Darwin/BSD link flags: the module's job is Linux cgroup placement, full
 stop.
 
+If OpenPAM support were ever genuinely needed, it is not just a
+constant swap: the error-code table diverges (`PAM_SESSION_ERR` 14 vs
+19) *and* the apply path depends on Linux-only `cgfs`. That work arrives
+as a dedicated feature plus a storage backend story — not as edits in
+place — and starts with a use case, since no OpenPAM host has cgroups.
+
 ## MSRV
 
 The workspace tracks **latest stable** dependencies and bumps
