@@ -13,8 +13,13 @@ cargo test --workspace
 
 `cgfs` is Linux-only by design (compile_error elsewhere); the other two
 crates are portable. `pam_cgroup` needs `cargo-c` only for
-`cbuild`/`cinstall`, not for the test suite (CI installs `libpam0g-dev`
-for the cdylib link).
+`cbuild`/`cinstall`, not for the test suite.
+
+PAM symbols are **not** linked at build time: `pam_mod.rs` compiles only
+under the `capi` feature (cargo-c turns it on), declares bare externs,
+and the host application's libpam resolves them at dlopen. No
+`libpam0g-dev` needed anywhere; keep the extern surface tiny — a typo
+would only surface at login.
 
 ## MSRV
 

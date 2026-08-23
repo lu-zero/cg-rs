@@ -15,7 +15,10 @@ const LOG_AUTHPRIV: c_int = 10 << 3;
 const LOG_ERR: c_int = 3;
 const LOG_INFO: c_int = 6;
 
-#[link(name = "pam")]
+// No #[link]: the module is dlopen'ed by the PAM application, whose libpam
+// satisfies these symbols at load time. Keeps builds header-free and
+// link-free; typos would surface at login, not compile — hence the tiny
+// surface (one function).
 extern "C" {
     fn pam_get_item(pamh: *const c_void, item: c_int, value: *mut *const c_void) -> c_int;
 }
@@ -23,7 +26,7 @@ extern "C" {
 fn log_msg(prio: c_int, msg: &str) {
     if let Ok(c) = CString::new(format!("pam_cgroup_rs: {msg}")) {
         unsafe {
-            libc::syslog(LOG_AUTHPRIV | prio, b"%s\0".as_ptr().cast(), c.as_ptr());
+            libc::syslog(LOG_AUTHPRIV | prio, c"%s".as_ptr(), c.as_ptr());
         }
     }
 }

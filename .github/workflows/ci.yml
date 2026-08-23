@@ -25,9 +25,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
-      # pam_cgroup's cdylib links -lpam at build time.
-      - name: Install Linux PAM headers
-        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo test --workspace
 
   clippy:
@@ -43,8 +40,6 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy
-      - name: Install Linux PAM headers
-        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo clippy --workspace --all-features -- -D warnings
 
   fmt:
@@ -78,7 +73,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
-      - name: Install Linux PAM headers
-        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo install cargo-c --locked
       - run: cargo cbuild -p pam_cgroup
