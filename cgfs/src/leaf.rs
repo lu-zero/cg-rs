@@ -4,7 +4,7 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rustix::fs::chown;
 use rustix::process::{Gid, Uid};
@@ -65,8 +65,31 @@ impl LeafSpec {
 }
 
 /// Create / chown / chmod / enable controllers / optionally attach `pid`.
+///
+/// Ownership and `dperm` apply to *every* directory this call creates, not
+/// just the leaf: a root-run daemon materialising `users/lu_zero/session`
+/// must not leave `users/` and `lu_zero/` root-owned (delegation wants the
+/// re-assertion libcgroup skipped).
 pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
+    // Collect not-yet-existing components before create_dir_all so they can
+    // be owned/moded afterwards; deepest last.
+    let mut created: Vec<PathBuf> = Vec::new();
+    let mut cur = spec.path.clone();
+    while !cur.exists() {
+        created.push(cur.clone());
+        let Some(parent) = cur.parent() else {
+            break;
+        };
+        cur = parent.to_path_buf();
+    }
     fs::create_dir_all(&spec.path)?;
+
+    for dir in created.iter().rev() {
+        set_owner(dir, spec.uid, spec.gid)?;
+        if let Some(mode) = spec.dperm {
+            set_mode(dir, mode)?;
+        }
+    }
     set_owner(&spec.path, spec.uid, spec.gid)?;
     if let Some(mode) = spec.dperm {
         set_mode(&spec.path, mode)?;
@@ -160,11 +183,15 @@ mod tests {
         let procs = fs::read_to_string(root.join(leaf_rel).join("cgroup.procs")).unwrap();
         assert_eq!(procs, "4242\n");
 
-        // Parent dirs share the spec owners.
+        // Every created component got owners AND dperm — a plain mkdir
+        // chain would leave 0o755&~umask on the intermediates.
         use std::os::unix::fs::MetadataExt;
-        let pmeta = fs::metadata(root.join("users/lu_zero")).unwrap();
-        assert_eq!(pmeta.uid(), uid);
-        assert_eq!(pmeta.gid(), gid);
+        for rel in ["users", "users/lu_zero", leaf_rel] {
+            let m = fs::metadata(root.join(rel)).unwrap();
+            assert_eq!(m.uid(), uid, "{rel}");
+            assert_eq!(m.gid(), gid, "{rel}");
+            assert_eq!(m.permissions().mode() & 0o777, 0o750, "{rel}");
+        }
 
         // Re-apply with no attach: idempotent on existing dirs.
         apply(&spec, None).unwrap();
