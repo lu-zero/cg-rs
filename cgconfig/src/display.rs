@@ -67,10 +67,18 @@ fn write_node_body(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
         write_set_block(f, "admin", &p.admin)?;
         writeln!(f, "\t}}")?;
     }
-    // Controller blocks in declaration order; controllers recorded without
-    // params (empty blocks) come out as empty blocks too.
-    let mut done: Vec<&str> = Vec::new();
+    // Attachment markers stay empty: a block carrying values would re-parse
+    // as stored state rather than subtree_control intent.
     for c in &n.controllers {
+        writeln!(f, "\t{c} {{")?;
+        writeln!(f, "\t}}")?;
+    }
+    // Parameter groups by filename-prefix controller.
+    let mut done: Vec<&str> = Vec::new();
+    for (c, _, _) in &n.params {
+        if done.contains(&c.as_str()) {
+            continue;
+        }
         done.push(c);
         writeln!(f, "\t{c} {{")?;
         for (pc, k, v) in &n.params {
@@ -79,16 +87,6 @@ fn write_node_body(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
             }
         }
         writeln!(f, "\t}}")?;
-    }
-    // Param triples whose controller never got a block (defensive; the
-    // parser cannot produce this today).
-    for (c, k, v) in &n.params {
-        if !done.contains(&c.as_str()) {
-            done.push(c);
-            writeln!(f, "\t{c} {{")?;
-            writeln!(f, "\t\t{k} = {};", token(v))?;
-            writeln!(f, "\t}}")?;
-        }
     }
     writeln!(f, "}}")
 }

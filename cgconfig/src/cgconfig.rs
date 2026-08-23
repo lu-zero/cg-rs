@@ -259,7 +259,10 @@ fn node_body(input: &mut &str) -> ModalResult<Node> {
         match item {
             Body::Perm(p) => merge_perm(&mut node.perm, p),
             Body::Ctl(c, params) => {
-                if !node.controllers.contains(&c) {
+                // Only parameter-less blocks mark controller attachment
+                // (subtree_control intent); a block carrying values is
+                // stored state on this node, not an enable for children.
+                if params.is_empty() && !node.controllers.contains(&c) {
                     node.controllers.push(c.clone());
                 }
                 node.params.extend(params);

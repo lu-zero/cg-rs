@@ -13,6 +13,25 @@ use cgconfig::model::{ConfigFile, Node, Perm, PermSet};
 
 use crate::nss;
 
+/// Control files that must never come back as parameters: read-only
+/// counters, volatile gauges and write-only triggers — reapplying them
+/// would either fail or lie.
+const SKIP_PARAM_SUFFIX: [&str; 9] = [
+    ".stat",
+    ".events",
+    ".pressure",
+    ".current",
+    ".peak",
+    ".numa_stat",
+    ".effective",
+    ".reclaim",
+    ".idle",
+];
+
+fn is_param(name: &str) -> bool {
+    !name.starts_with("cgroup.") && !SKIP_PARAM_SUFFIX.iter().any(|s| name.ends_with(s))
+}
+
 /// Walk `mount`/`rel_root` (default `/`) and describe every cgroup found.
 ///
 /// The base directory itself is not described; use `group . { … }` in a
@@ -64,6 +83,8 @@ fn describe(path: &Path, rel: &Path) -> io::Result<Node> {
         })
         .unwrap_or_default();
 
+    let params = collect_params(path);
+
     let name = rel
         .strip_prefix("/")
         .unwrap_or(rel)
@@ -91,8 +112,38 @@ fn describe(path: &Path, rel: &Path) -> io::Result<Node> {
         name,
         perm,
         controllers,
-        params: Vec::new(),
+        params,
     })
+}
+
+/// Single-line writable knobs become `(controller, file, value)` triples;
+/// the controller is the filename prefix (`memory.max` → `memory`). The
+/// Display layer emits a block for param controllers even when they are
+/// absent from `subtree_control`.
+fn collect_params(path: &Path) -> Vec<(String, String, String)> {
+    let mut entries: Vec<_> = match fs::read_dir(path) {
+        Ok(it) => it.filter_map(Result::ok).collect(),
+        Err(_) => return Vec::new(),
+    };
+    entries.sort_by_key(|e| e.file_name());
+    let mut out = Vec::new();
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !entry.file_type().map(|t| t.is_file()).unwrap_or(false) || !is_param(&name) {
+            continue;
+        }
+        let Ok(value) = fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let value = value.trim();
+        if value.is_empty() || value.contains('\n') {
+            continue; // multi-line tables (stats) are not config
+        }
+        let controller = name.split('.').next().unwrap_or("misc").to_owned();
+        out.push((controller, name.into_owned(), value.to_owned()));
+    }
+    out
 }
 
 #[cfg(test)]
@@ -128,6 +179,19 @@ mod tests {
         }
         cgfs::apply(&spec, None).unwrap();
 
+        // Writable knobs plus the volatile/read-only families that must
+        // never become parameters.
+        let session = tmp.path().join("users/lu_zero/session");
+        std::fs::write(session.join("memory.max"), "max\n").unwrap();
+        std::fs::write(session.join("cpu.max"), "100000 100000\n").unwrap();
+        std::fs::write(session.join("pids.max"), "512\n").unwrap();
+        std::fs::write(session.join("memory.current"), "4096\n").unwrap();
+        std::fs::write(
+            session.join("cpu.stat"),
+            "usage_usec 1\nuser_usec 0\nsystem_usec 0\n",
+        )
+        .unwrap();
+
         let cfg = snapshot(tmp.path(), Path::new("/")).unwrap();
         let rendered = cfg.to_string();
         assert!(
@@ -137,6 +201,14 @@ mod tests {
         assert!(rendered.contains("dperm = 750;"), "{rendered}");
         assert!(rendered.contains("fperm = 604;"), "{rendered}");
         assert!(rendered.contains("\tcpu {"), "{rendered}");
+        assert!(rendered.contains("memory.max = max;"), "{rendered}");
+        assert!(
+            rendered.contains("cpu.max = \"100000 100000\";"),
+            "{rendered}"
+        );
+        assert!(rendered.contains("pids.max = 512;"), "{rendered}");
+        assert!(!rendered.contains("memory.current"), "{rendered}");
+        assert!(!rendered.contains("cpu.stat"), "{rendered}");
 
         // The snapshot is itself valid config that plans back to the same tree.
         let reparsed = parse_cgconfig(&rendered).unwrap();
@@ -145,6 +217,11 @@ mod tests {
         assert_eq!(perm.admin.dperm, Some(0o750));
         assert_eq!(perm.task.fperm, Some(0o604));
         assert_eq!(leaf.controllers, vec!["cpu".to_owned()]);
+        assert!(leaf.params.contains(&(
+            "memory".to_owned(),
+            "memory.max".to_owned(),
+            "max".to_owned()
+        )));
         assert_eq!(
             nss::uid_from_name(perm.task.uid.as_deref().unwrap()).unwrap(),
             uid
