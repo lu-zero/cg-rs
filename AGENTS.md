@@ -46,6 +46,9 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   rustix-backed, Linux-gated (statfs-verified mounts).
 - `pam_cgroup/` — PAM module (cdylib via cargo-c, `panic=abort` in capi
   metadata) + `pam-cgroup` CLI. Consumes `cgfs`; TOML config is its own.
+  The capi section uses `plugin = true` (`pam_cgroup.so` in
+  `$libdir/security`, no .a/.pc); needs a cargo-c carrying plugin mode —
+  pending review upstream, so `main`'s CI exercises the legacy layout.
 - `cgctl/` — busybox CLI over cgconfig+cgfs (`config`, `ls`, `get`,
   `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
 - `cgrulesd/` — poll-based enforcement of cgrules.conf; destinations

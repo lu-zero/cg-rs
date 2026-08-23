@@ -35,7 +35,7 @@ build-release:
     cargo build --release --workspace
     cargo cbuild -p pam_cgroup --release --prefix {{prefix}}
 
-# install the PAM module as $libdir/security/libpam_cgroup_rs.so
+# install the PAM module as $libdir/security/pam_cgroup.so
 install-pam:
     {{sudo}} cargo cinstall -p pam_cgroup --release {{destarg}} \
         --prefix {{prefix}} --libdir {{libdir}}

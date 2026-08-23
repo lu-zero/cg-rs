@@ -27,7 +27,7 @@ sudo cargo cinstall --release --prefix=/usr --libdir=/usr/lib64
 `install_subdir = "security"` is cargo-c’s plugin mode: the module goes in `$libdir/security/`, not the linker’s default libdir.
 
 ```text
-/usr/lib64/security/libpam_cgroup_rs.so
+/usr/lib64/security/pam_cgroup.so
 ```
 
 (`versioning = false` so Unix does not add `.so.X` next to it. rustc’s Unix cdylib name still has the `lib` prefix.)
