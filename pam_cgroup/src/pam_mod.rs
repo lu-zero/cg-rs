@@ -8,10 +8,11 @@ use crate::config::{Config, DEFAULT_CONFIG};
 use crate::place;
 use crate::user::User;
 
-// Linux-PAM numeric values (security/_pam_types.h). These are NOT the
-// portable XSSO numbers OpenPAM uses — there PAM_SESSION_ERR is 19 and 14
-// means CRED_UNAVAIL — so keep the Linux gate; do not "fix" these against
-// OpenPAM headers.
+// Linux-PAM numeric values from <security/_pam_types.h> (upstream file is
+// BSD-3-Clause, Ts'o/Morgan; the integers themselves are not copyrightable
+// expression). These are NOT the portable XSSO numbers OpenPAM uses — there
+// PAM_SESSION_ERR is 19 and 14 means CRED_UNAVAIL — so keep the Linux gate;
+// do not "fix" these against OpenPAM headers.
 const PAM_SUCCESS: c_int = 0;
 const PAM_SESSION_ERR: c_int = 14;
 const PAM_USER: c_int = 2;
