@@ -1,13 +1,13 @@
 [package]
 name = "pam_cgroup"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.74"
 description = "PAM session module: place the login in a delegated cgroup v2 leaf"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/lu-zero/pam_cgroup"
 keywords = ["pam", "cgroup", "cgroupfs"]
 categories = ["os::unix-apis", "authentication"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [lib]
 name = "pam_cgroup_rs"
@@ -24,10 +24,10 @@ default = []
 capi = []
 
 [dependencies]
-libc = "0.2"
+libc = { workspace = true }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
-cgfs = { path = "../cgfs" }
+cgfs = { workspace = true }
 
 # cargo cinstall --prefix=/usr --libdir=/usr/lib64
 #   $libdir/security/libpam_cgroup_rs.so  (install_subdir = plugin dir)

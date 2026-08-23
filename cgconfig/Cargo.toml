@@ -1,22 +1,22 @@
 [package]
 name = "cgconfig"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.74"
 description = "winnow parsers for libcgroup cgconfig.conf and cgrules.conf"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/lu-zero/cgconfig"
 keywords = ["cgroup", "libcgroup", "parser", "cgconfig", "cgrules"]
 categories = ["parser-implementations", "os::unix-apis"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-winnow = "1"
+winnow = { workspace = true }
 # Core protocol only (Diagnostic, LabeledSpan, NamedSource); no derive,
 # no renderer. Consumers opt into `miette/features = ["fancy"]` themselves.
-miette = { version = "7", default-features = false }
+miette = { workspace = true }
 
 [dev-dependencies]
-miette = { version = "7", features = ["fancy-no-backtrace"] }
+miette = { workspace = true, features = ["fancy-no-backtrace"] }
 
 [package.metadata.docs.rs]
 all-features = true

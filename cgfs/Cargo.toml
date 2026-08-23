@@ -1,16 +1,16 @@
 [package]
 name = "cgfs"
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.74"
 description = "cgroupfs v2 management: create, delegate, attach, delete, walk, raw control-file access"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/lu_zero/cgfs"
 keywords = ["cgroup", "cgroupv2", "cgroupfs", "linux"]
 categories = ["os::unix-apis"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
-libc = "0.2"
+libc = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
