@@ -3,6 +3,9 @@
 //! The cdylib exports `pam_sm_open_session`. The same apply path is the
 //! `pam-cgroup` CLI.
 
+#[cfg(not(target_os = "linux"))]
+compile_error!("pam_cgroup places logins in Linux cgroup v2 leaves");
+
 pub mod config;
 pub mod place;
 pub mod user;
