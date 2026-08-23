@@ -1,5 +1,7 @@
 # pam_cgroup
 
+[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
+
 PAM session module that puts the login into a **delegated cgroup v2**
 hierarchy via cgroupfs. No libcgroup, no systemd.
 

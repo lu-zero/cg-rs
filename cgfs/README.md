@@ -1,5 +1,9 @@
 # cgfs
 
+[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cgfs.svg)](https://crates.io/crates/cgfs)
+[![docs.rs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs)
+
 cgroupfs **v2** management primitives — the *write* half of the cgroup
 filesystem. libc-only, no controller opinions.
 

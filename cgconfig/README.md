@@ -1,5 +1,9 @@
 # cgconfig
 
+[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/cgconfig.svg)](https://crates.io/crates/cgconfig)
+[![docs.rs](https://docs.rs/cgconfig/badge.svg)](https://docs.rs/cgconfig)
+
 winnow parsers for the legacy libcgroup configuration formats, plus a
 translation layer to **cgroup v2** leaves.
 
