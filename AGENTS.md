@@ -13,7 +13,16 @@ cargo test --workspace
 
 `cgfs` is Linux-only by design (compile_error elsewhere); the other two
 crates are portable. `pam_cgroup` needs `cargo-c` only for
-`cbuild`/`cinstall`, not for the test suite.
+`cbuild`/`cinstall`, not for the test suite (CI installs `libpam0g-dev`
+for the cdylib link).
+
+## MSRV
+
+The workspace tracks **latest stable** dependencies and bumps
+`rust-version` as needed (currently **1.85**, driven by edition-2024
+transitive deps like getrandom). Do not pin crates to older releases to
+satisfy a lower MSRV. `Cargo.lock` is untracked, so CI's fresh
+resolution must stay compatible — the 1.85 matrix leg enforces it.
 
 ## Layout
 

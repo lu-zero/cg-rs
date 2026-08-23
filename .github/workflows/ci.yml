@@ -16,14 +16,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1.74 is the workspace MSRV (rust-version); testing it here *is*
-        # the MSRV check — no separate cargo-msrv pass needed.
-        rust: [stable, "1.74"]
+        # 1.85 is the workspace MSRV (rust-version); testing it here *is*
+        # the MSRV check — no separate cargo-msrv pass needed. Cargo.lock
+        # is untracked, so fresh resolution must stay MSRV-compatible.
+        rust: [stable, "1.85"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
+      # pam_cgroup's cdylib links -lpam at build time.
+      - name: Install Linux PAM headers
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo test --workspace
 
   clippy:
@@ -32,13 +36,15 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rust: [stable, "1.74"]
+        rust: [stable, "1.85"]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: ${{ matrix.rust }}
           components: clippy
+      - name: Install Linux PAM headers
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo clippy --workspace --all-features -- -D warnings
 
   fmt:
@@ -72,5 +78,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: stable
+      - name: Install Linux PAM headers
+        run: sudo apt-get update && sudo apt-get install -y libpam0g-dev
       - run: cargo install cargo-c --locked
       - run: cargo cbuild -p pam_cgroup
