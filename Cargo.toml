@@ -10,8 +10,8 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/lu_zero/cg-rs"
 
 [workspace.dependencies]
-cgconfig = { path = "cgconfig" }
-cgfs = { path = "cgfs" }
+cgconfig = { path = "cgconfig", version = "0.1.0" }
+cgfs = { path = "cgfs", version = "0.1.0" }
 winnow = "1"
 miette = { version = "7", default-features = false }
 libc = "0.2"
