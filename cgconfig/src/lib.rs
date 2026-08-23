@@ -38,6 +38,7 @@
 
 pub mod cgconfig;
 pub mod cgrules;
+pub mod display;
 pub mod model;
 pub mod v2;
 
