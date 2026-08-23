@@ -10,6 +10,7 @@ Rust reimplementation of the useful parts of **libcgroup**, for
 | [`cgconfig`](cgconfig) | [![crates.io](https://img.shields.io/crates/v/cgconfig.svg)](https://crates.io/crates/cgconfig) | [![docs](https://docs.rs/cgconfig/badge.svg)](https://docs.rs/cgconfig) | `cgconfigparser`, config parsing | winnow parsers for `cgconfig.conf` + `cgrules.conf`, `%u`-style templates, miette diagnostics, v2 `LeafPlan` bridge |
 | [`cgfs`](cgfs) | [![crates.io](https://img.shields.io/crates/v/cgfs.svg)](https://crates.io/crates/cgfs) | [![docs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs) | libcg fs layer | create/delegate/attach/delete/walk cgroups; raw control-file read/write |
 | [`pam_cgroup`](pam_cgroup) | [![crates.io](https://img.shields.io/crates/v/pam_cgroup.svg)](https://crates.io/crates/pam_cgroup) | [![docs](https://docs.rs/pam_cgroup/badge.svg)](https://docs.rs/pam_cgroup) | `pam_cgroup.so` | PAM session module placing logins into delegated user leaves (`users/$USER/session`) |
+| [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg)](https://crates.io/crates/cgctl) | [![docs](https://docs.rs/cgctl/badge.svg)](https://docs.rs/cgctl) | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
 
 Planned: `cgctl` (busybox-style CLI: cgcreate/cgdelete/cgset/cgget/
 lscgroup/lssubsys/cgexec/cgclassify/cgsnapshot), `cgrulesd`

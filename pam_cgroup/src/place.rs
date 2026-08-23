@@ -35,6 +35,8 @@ impl Step {
             dperm: Some(self.mode),
             fperm: Some(self.file_mode),
             task_fperm: Some(self.file_mode),
+            task_uid: None,
+            task_gid: None,
             subtree_control: self.subtree_control.clone(),
         }
     }

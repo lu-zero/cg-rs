@@ -46,6 +46,8 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   rustix-backed, Linux-gated (statfs-verified mounts).
 - `pam_cgroup/` — PAM module (cdylib via cargo-c, `panic=abort` in capi
   metadata) + `pam-cgroup` CLI. Consumes `cgfs`; TOML config is its own.
+- `cgctl/` — busybox CLI over cgconfig+cgfs (`config`, `ls`, `get`,
+  `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
 
 Shared metadata lives in `[workspace.package]`; shared deps in
 `[workspace.dependencies]`. Member manifests use `workspace = true`
@@ -57,9 +59,8 @@ inheritance — do not re-pin versions locally.
   hierarchies, no systemd D-Bus, no release_agent.
 - `miette` stays renderer-free at the library level: binaries opt into
   `features = ["fancy"]`.
-- Roadmap crates: `cgctl` (busybox CLI replacing the cg* tools),
-  `cgrulesd` (cgrules enforcement daemon). Do not start them inside an
-  unrelated commit.
+- Roadmap: `cgrulesd` (cgrules enforcement daemon). Do not start it
+  inside an unrelated commit.
 
 ## Commits
 

@@ -18,6 +18,8 @@
 //!     dperm: Some(0o775),
 //!     fperm: Some(0o664),
 //!     task_fperm: None,
+//!     task_uid: None,
+//!     task_gid: None,
 //!     subtree_control: vec!["cpu".into(), "memory".into()],
 //! };
 //! cgfs::apply(&spec, Some(4242))?; // mkdir, chown, chmod, +cpu +memory, attach
@@ -37,7 +39,7 @@ pub mod mount;
 pub mod raw;
 pub mod tree;
 
-pub use leaf::{apply, attach, enable_subtree_control, LeafSpec};
+pub use leaf::{apply, attach, enable_subtree_control, set_mode, set_owner, LeafSpec};
 pub use mount::{find_mount, join, self_relative, DEFAULT_MOUNT};
 pub use raw::{procs, read_kv, read_string, read_u64, write_file};
 pub use tree::{delete_leaf, delete_tree, list_groups};

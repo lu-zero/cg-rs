@@ -7,7 +7,7 @@
 
 use std::fmt;
 
-use crate::model::{ConfigFile, Mount, Node, Perm, PermSet};
+use crate::model::{ConfigFile, Node, Perm, PermSet};
 
 impl fmt::Display for ConfigFile {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -119,7 +119,7 @@ fn write_set_block(f: &mut fmt::Formatter<'_>, kind: &str, s: &PermSet) -> fmt::
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::parse_cgconfig;
 
     fn round_trip(text: &str) {

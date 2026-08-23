@@ -1,0 +1,25 @@
+[package]
+name = "cgctl"
+description = "busybox-style cgroup v2 CLI: config, ls, get, set, classify, exec, delete, snapshot"
+keywords = ["cgroup", "cgroupv2", "cli"]
+categories = ["os::unix-apis", "command-line-utilities"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cgctl"
+path = "src/main.rs"
+
+[dependencies]
+cgconfig = { workspace = true }
+cgfs = { workspace = true }
+libc = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+
+[package.metadata.docs.rs]
+targets = ["x86_64-unknown-linux-gnu"]

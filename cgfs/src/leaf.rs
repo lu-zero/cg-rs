@@ -25,7 +25,12 @@ pub struct LeafSpec {
     pub gid: Option<u32>,
     pub dperm: Option<u32>,
     pub fperm: Option<u32>,
+    /// Mode override for `cgroup.procs`/`cgroup.threads`.
     pub task_fperm: Option<u32>,
+    /// Owners for `cgroup.procs`/`cgroup.threads` when they differ from
+    /// `uid`/`gid` (cgconfig.conf's split of `task {}` vs `admin {}`).
+    pub task_uid: Option<u32>,
+    pub task_gid: Option<u32>,
     /// Controllers to enable for children: written as `+cpu +memory …`.
     pub subtree_control: Vec<String>,
 }
@@ -97,7 +102,14 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
     for name in CONTROL_FILES {
         let f = spec.path.join(name);
         if f.exists() {
-            set_owner(&f, spec.uid, spec.gid)?;
+            // task files may have owners distinct from admin's.
+            let (uid, gid) = match name {
+                "cgroup.procs" | "cgroup.threads" => {
+                    (spec.task_uid.or(spec.uid), spec.task_gid.or(spec.gid))
+                }
+                _ => (spec.uid, spec.gid),
+            };
+            set_owner(&f, uid, gid)?;
             let mode = match name {
                 "cgroup.procs" | "cgroup.threads" => spec.task_fperm.or(spec.fperm),
                 _ => spec.fperm,
@@ -131,21 +143,23 @@ pub fn attach(path: &Path, pid: u32) -> io::Result<()> {
     write(path.join("cgroup.procs"), pid.to_string())
 }
 
+/// Change ownership of an existing path; `None` leaves the side unchanged.
+pub fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
+    chown(path, uid.map(Uid::from_raw), gid.map(Gid::from_raw)).map_err(io::Error::from)
+}
+
+/// chmod an existing path (octal mode bits).
+pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    let mut perms = fs::metadata(path)?.permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms)
+}
+
 fn write(path: impl AsRef<Path>, body: impl AsRef<[u8]>) -> io::Result<()> {
     fs::write(
         path.as_ref(),
         format!("{}\n", String::from_utf8_lossy(body.as_ref())),
     )
-}
-
-fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
-    chown(path, uid.map(Uid::from_raw), gid.map(Gid::from_raw)).map_err(io::Error::from)
-}
-
-fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
-    let mut perms = fs::metadata(path)?.permissions();
-    perms.set_mode(mode);
-    fs::set_permissions(path, perms)
 }
 
 #[cfg(test)]
@@ -168,6 +182,8 @@ mod tests {
             dperm: Some(0o750),
             fperm: Some(0o640),
             task_fperm: Some(0o604),
+            task_uid: None,
+            task_gid: None,
             subtree_control: vec!["cpu".into(), "memory".into()],
         };
         apply(&spec, Some(4242)).unwrap();
