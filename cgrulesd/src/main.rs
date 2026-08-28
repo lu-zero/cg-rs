@@ -41,8 +41,12 @@ fn parse_opts() -> Opts {
     };
     let mut it = std::env::args().skip(1);
     while let Some(a) = it.next() {
-        let mut val =
-            |name: &str| -> String { it.next().unwrap_or_else(|| panic!("{name} needs a value")) };
+        let mut val = |name: &str| -> String {
+            it.next().unwrap_or_else(|| {
+                eprintln!("cgrulesd: {name} needs a value");
+                usage()
+            })
+        };
         match a.as_str() {
             "--config" => o.config = val("--config").into(),
             "--cgconfig" => o.cgconfig = Some(val("--cgconfig").into()),
@@ -83,9 +87,29 @@ fn run(opts: &Opts) -> io::Result<()> {
     loop {
         match load(opts) {
             Ok((rules, cfg)) => {
-                let mount = cgfs::find_mount()?;
+                let mount = match cgfs::find_mount() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("cgrulesd: find_mount: {e}");
+                        if opts.once {
+                            return Err(e);
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(opts.interval));
+                        continue;
+                    }
+                };
                 let rows = gather(std::process::id());
-                let out = enforce::enforce_once(&mount, &rules, &cfg, &rows, opts.verbose)?;
+                let out = match enforce::enforce_once(&mount, &rules, &cfg, &rows, opts.verbose) {
+                    Ok(o) => o,
+                    Err(e) => {
+                        eprintln!("cgrulesd: enforce: {e}");
+                        if opts.once {
+                            return Err(e);
+                        }
+                        std::thread::sleep(std::time::Duration::from_secs(opts.interval));
+                        continue;
+                    }
+                };
                 if opts.verbose {
                     eprintln!(
                         "cgrulesd: moved {} placed {} ruleless {} nodest {}",

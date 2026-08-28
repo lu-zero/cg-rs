@@ -71,7 +71,19 @@ pub fn enforce_once(
             }
             continue;
         };
-        cgfs::apply(&spec, Some(row.pid))?;
+        if let Err(e) = cgfs::apply(&spec, Some(row.pid)) {
+            if e.kind() == io::ErrorKind::NotFound
+                || e.raw_os_error() == Some(libc::ESRCH)
+                || e.raw_os_error() == Some(libc::ENOENT)
+            {
+                if verbose {
+                    eprintln!("cgrulesd: pid {} vanished: {e}", row.pid);
+                }
+                continue;
+            }
+            eprintln!("cgrulesd: apply pid {} -> /{}: {e}", row.pid, dest);
+            continue;
+        }
         out.moved += 1;
         if verbose {
             eprintln!("cgrulesd: pid {} ({}) -> /{}", row.pid, row.comm, dest);
