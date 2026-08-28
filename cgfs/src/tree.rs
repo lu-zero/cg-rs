@@ -32,14 +32,13 @@ fn walk(
 
 /// Remove a single (empty) cgroup directory.
 pub fn delete_leaf(path: &std::path::Path) -> io::Result<()> {
-    fs::remove_dir(path)
-}
-
-/// Remove `path` and every cgroup below it, children first.
-///
-/// Refuses to remove the cgroup2 mount point itself.
-pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
-    let canon = path.canonicalize()?;
+    let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if canon == std::path::Path::new("/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to remove filesystem root",
+        ));
+    }
     if let Ok(mount) = find_mount() {
         if canon == mount {
             return Err(io::Error::new(
@@ -48,10 +47,70 @@ pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
             ));
         }
     }
-    remove_children(&canon)
+    fs::remove_dir(path)
+}
+
+/// Remove `path` and every cgroup below it, children first.
+///
+/// Refuses to remove the cgroup2 mount point itself and guards against
+/// symlink and non-cgroup2 cases.
+pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
+    let canon = path.canonicalize()?;
+    if canon == std::path::Path::new("/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to remove filesystem root",
+        ));
+    }
+    match find_mount() {
+        Ok(mount) => {
+            if canon == mount {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing to remove the cgroup mount point",
+                ));
+            }
+            if mount == std::path::Path::new(crate::mount::DEFAULT_MOUNT) && canon == mount {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing to remove the cgroup mount point",
+                ));
+            }
+        }
+        Err(_) => {
+            // If we cannot determine the mount, refuse to delete the default
+            // mount path as canonicalized.
+            let def_canon = std::path::Path::new(crate::mount::DEFAULT_MOUNT)
+                .canonicalize()
+                .unwrap_or_else(|_| std::path::PathBuf::from(crate::mount::DEFAULT_MOUNT));
+            if canon == def_canon {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "refusing to remove the cgroup mount point",
+                ));
+            }
+        }
+    }
+    // Iterative stack to avoid recursion overflow.
+    let mut stack = vec![canon.clone()];
+    let mut order = Vec::new();
+    while let Some(dir) = stack.pop() {
+        order.push(dir.clone());
+        for entry in fs::read_dir(&dir)? {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    for dir in order.iter().rev() {
+        fs::remove_dir(dir)?;
+    }
+    Ok(())
 }
 
 fn remove_children(dir: &std::path::Path) -> io::Result<()> {
+    // kept for backwards compat if used internally; iterative version above is preferred
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         if entry.file_type()?.is_dir() {
