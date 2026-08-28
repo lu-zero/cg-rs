@@ -142,7 +142,14 @@ pub unsafe extern "C" fn pam_sm_open_session(
     argc: c_int,
     argv: *const *const c_char,
 ) -> c_int {
-    open_session(pamh, argc, argv)
+    let ret = std::panic::catch_unwind(|| open_session(pamh, argc, argv));
+    match ret {
+        Ok(v) => v,
+        Err(_) => {
+            log_msg(LOG_ERR, "panic in pam_sm_open_session");
+            PAM_SESSION_ERR
+        }
+    }
 }
 
 #[no_mangle]
