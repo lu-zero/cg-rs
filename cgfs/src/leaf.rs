@@ -181,10 +181,10 @@ pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
 }
 
 fn write(path: impl AsRef<Path>, body: impl AsRef<[u8]>) -> io::Result<()> {
-    fs::write(
-        path.as_ref(),
-        format!("{}\n", String::from_utf8_lossy(body.as_ref())),
-    )
+    let bytes = body.as_ref();
+    let s = String::from_utf8_lossy(bytes);
+    let trimmed = s.trim_end_matches(|c| c == '\n' || c == '\r');
+    fs::write(path.as_ref(), format!("{trimmed}\n"))
 }
 
 #[cfg(test)]
