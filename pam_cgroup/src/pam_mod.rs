@@ -49,6 +49,9 @@ fn pam_user(pamh: *const c_void) -> Result<String, c_int> {
 }
 
 fn config_path(argc: c_int, argv: *const *const c_char) -> String {
+    if argv.is_null() {
+        return DEFAULT_CONFIG.to_string();
+    }
     for i in 0..argc {
         let p = unsafe { *argv.offset(i as isize) };
         if p.is_null() {
