@@ -122,13 +122,13 @@ fn leaf_spec(
         }
         return Some(LeafSpec {
             path,
-            uid: resolve(plan.owner_uid.as_deref()),
-            gid: resolve(plan.owner_gid.as_deref()),
+            uid: resolve_user(plan.owner_uid.as_deref()),
+            gid: resolve_group(plan.owner_gid.as_deref()),
             dperm: plan.dir_mode,
             fperm: plan.file_mode,
             task_fperm: plan.tasks_file_mode,
-            task_uid: None,
-            task_gid: None,
+            task_uid: resolve_user(plan.task_uid.as_deref()),
+            task_gid: resolve_group(plan.task_gid.as_deref()),
             subtree_control: plan.subtree_control.clone(),
         });
     }
@@ -146,6 +146,12 @@ fn leaf_spec(
         .then(|| LeafSpec::new(path))
 }
 
+fn resolve_user(name: Option<&str>) -> Option<u32> {
+    name.and_then(|n| crate::nss::resolve("user", n).ok())
+}
+fn resolve_group(name: Option<&str>) -> Option<u32> {
+    name.and_then(|n| crate::nss::resolve("group", n).ok())
+}
 fn resolve(name: Option<&str>) -> Option<u32> {
     name.and_then(|n| {
         crate::nss::resolve("user", n)
