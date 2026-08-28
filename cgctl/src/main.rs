@@ -185,13 +185,24 @@ fn exec(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
     let procs = path.join("cgroup.procs");
     use std::os::unix::process::CommandExt;
-    // SAFETY: the closure runs between fork and exec in the child; writing
-    // to cgroup.procs there is async-signal-safe enough for our purposes.
     let err = unsafe {
         std::process::Command::new(rest.first().unwrap_or_else(|| usage()))
             .args(&rest[1..])
             .pre_exec(move || {
-                std::fs::write(&procs, b"0").map_err(std::io::Error::other)?;
+                // Only async-signal-safe operations between fork and exec.
+                let cstr = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
+                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+                let fd = unsafe { libc::open(cstr.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+                if fd < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                let buf = b"0\n";
+                let ret =
+                    unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
+                unsafe { libc::close(fd) };
+                if ret < 0 {
+                    return Err(io::Error::last_os_error());
+                }
                 Ok(())
             })
             .exec()
