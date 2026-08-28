@@ -99,6 +99,16 @@ pub fn enforce_once(
     Ok(out)
 }
 
+fn dest_path(mount: &Path, dest: &str) -> PathBuf {
+    let mut p = mount.to_path_buf();
+    for part in dest.split('/') {
+        if !part.is_empty() {
+            p.push(part);
+        }
+    }
+    p
+}
+
 fn leaf_spec(
     cfg: &ConfigFile,
     dest: &str,
@@ -114,14 +124,8 @@ fn leaf_spec(
         cgconfig::plan_template(cfg, template_name, identity)
     };
     if let Some(plan) = plan {
-        let mut path: PathBuf = mount.to_path_buf();
-        for part in dest.split('/') {
-            if !part.is_empty() {
-                path.push(part);
-            }
-        }
         return Some(LeafSpec {
-            path,
+            path: dest_path(mount, dest),
             uid: resolve_user(plan.owner_uid.as_deref()),
             gid: resolve_group(plan.owner_gid.as_deref()),
             dperm: plan.dir_mode,
@@ -135,12 +139,7 @@ fn leaf_spec(
 
     // No config entry: an existing directory (created by PAM or the admin)
     // is still a valid destination; only ownership stays untouched.
-    let mut path: PathBuf = mount.to_path_buf();
-    for part in dest.split('/') {
-        if !part.is_empty() {
-            path.push(part);
-        }
-    }
+    let path = dest_path(mount, dest);
     path.join("cgroup.procs")
         .exists()
         .then(|| LeafSpec::new(path))

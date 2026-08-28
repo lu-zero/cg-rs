@@ -120,11 +120,18 @@ pub(crate) fn parse_v2_rel(text: &str) -> Option<PathBuf> {
 }
 
 /// Append a hierarchy-relative path to the mount point; `/` collapses away.
+/// Relative inputs without a leading `/` are also appended.
 pub fn join(mount: &Path, rel: &Path) -> PathBuf {
-    match rel.strip_prefix("/") {
-        Ok(r) if !r.as_os_str().is_empty() => mount.join(r),
-        _ => mount.to_path_buf(),
+    if rel.as_os_str().is_empty() || rel == Path::new("/") {
+        return mount.to_path_buf();
     }
+    if let Ok(r) = rel.strip_prefix("/") {
+        if r.as_os_str().is_empty() {
+            return mount.to_path_buf();
+        }
+        return mount.join(r);
+    }
+    mount.join(rel)
 }
 
 #[cfg(test)]
