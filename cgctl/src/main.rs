@@ -233,14 +233,13 @@ fn exec(rest: &mut Vec<String>) -> io::Result<()> {
                 // Only async-signal-safe operations between fork and exec.
                 let cstr = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
                     .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
-                let fd = unsafe { libc::open(cstr.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC) };
+                let fd = libc::open(cstr.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
                 if fd < 0 {
                     return Err(io::Error::last_os_error());
                 }
                 let buf = b"0\n";
-                let ret =
-                    unsafe { libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len()) };
-                unsafe { libc::close(fd) };
+                let ret = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
+                libc::close(fd);
                 if ret < 0 {
                     return Err(io::Error::last_os_error());
                 }

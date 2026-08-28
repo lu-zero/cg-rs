@@ -142,7 +142,7 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
             }
             if pos == 2 {
                 // destination itself is comment — missing destination
-                return Err(err(format!("need at least 3 fields, got 2")));
+                return Err(err("need at least 3 fields, got 2".to_string()));
             }
             (toks[2], &toks[3..pos])
         } else {

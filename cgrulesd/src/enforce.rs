@@ -151,6 +151,7 @@ fn resolve_user(name: Option<&str>) -> Option<u32> {
 fn resolve_group(name: Option<&str>) -> Option<u32> {
     name.and_then(|n| crate::nss::resolve("group", n).ok())
 }
+#[allow(dead_code)]
 fn resolve(name: Option<&str>) -> Option<u32> {
     name.and_then(|n| {
         crate::nss::resolve("user", n)

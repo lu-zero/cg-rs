@@ -113,11 +113,11 @@ fn utf8_step(b: &[u8]) -> usize {
     let c = b[0];
     if c < 0x80 {
         1
-    } else if c >= 0xC2 && c <= 0xDF {
+    } else if (0xC2..=0xDF).contains(&c) {
         2.min(b.len())
-    } else if c >= 0xE0 && c <= 0xEF {
+    } else if (0xE0..=0xEF).contains(&c) {
         3.min(b.len())
-    } else if c >= 0xF0 && c <= 0xF4 {
+    } else if (0xF0..=0xF4).contains(&c) {
         4.min(b.len())
     } else {
         1
