@@ -337,8 +337,18 @@ fn owner_block(input: &mut &str) -> ModalResult<(bool, PermSet)> {
         match k.as_str() {
             "uid" => set.uid = Some(v),
             "gid" => set.gid = Some(v),
-            "dperm" => set.dperm = octal(&v),
-            "fperm" => set.fperm = octal(&v),
+            "dperm" => {
+                let m = octal(&v).ok_or_else(|| {
+                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new())
+                })?;
+                set.dperm = Some(m);
+            }
+            "fperm" => {
+                let m = octal(&v).ok_or_else(|| {
+                    winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new())
+                })?;
+                set.fperm = Some(m);
+            }
             _ => {} // libcgroup ignores unknown keys
         }
     }
