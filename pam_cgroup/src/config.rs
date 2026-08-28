@@ -8,6 +8,7 @@ use serde::Deserialize;
 pub const DEFAULT_CONFIG: &str = "/etc/cgroup/pam_cgroup.toml";
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "default_mount")]
     pub mount: PathBuf,
@@ -22,6 +23,7 @@ fn default_mount() -> PathBuf {
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Place {
     /// Relative to [`Config::mount`]. `{user}` `{uid}` `{gid}` `{group}`.
     pub path: String,
