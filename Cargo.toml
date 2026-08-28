@@ -17,3 +17,6 @@ winnow = "1"
 miette = { version = "7", default-features = false }
 libc = "0.2"
 rustix = { version = "1", features = ["fs", "process"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+tempfile = "3"

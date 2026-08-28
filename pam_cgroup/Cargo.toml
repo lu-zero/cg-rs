@@ -25,14 +25,14 @@ capi = []
 
 [dependencies]
 libc = { workspace = true }
-serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+serde = { workspace = true }
+toml = { workspace = true }
 cgfs = { workspace = true }
 
 # cargo cinstall --prefix=/usr --libdir=/usr/lib64
-#   $libdir/security/libpam_cgroup_rs.so  (install_subdir = plugin dir)
+#   $libdir/security/pam_cgroup.so  (install_subdir = plugin dir)
 [package.metadata.capi]
-min_version = "0.9.16"
+min_version = "0.10.25"
 
 [package.metadata.capi.header]
 # Dynamic module: no C header.

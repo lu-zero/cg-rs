@@ -13,10 +13,6 @@ Rust reimplementation of the useful parts of **libcgroup**, for
 | [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg)](https://crates.io/crates/cgctl) | [![docs](https://docs.rs/cgctl/badge.svg)](https://docs.rs/cgctl) | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
 | [`cgrulesd`](cgrulesd) | [![crates.io](https://img.shields.io/crates/v/cgrulesd.svg)](https://crates.io/crates/cgrulesd) | [![docs](https://docs.rs/cgrulesd/badge.svg)](https://docs.rs/cgrulesd) | cgred / cgrulesengd | poll-based daemon keeping processes inside their cgrules destinations |
 
-Planned: `cgctl` (busybox-style CLI: cgcreate/cgdelete/cgset/cgget/
-lscgroup/lssubsys/cgexec/cgclassify/cgsnapshot), `cgrulesd`
-(rules enforcement daemon).
-
 Not reproduced on purpose: v1 multi-hierarchy mounting, Python bindings,
 release_agent plumbing.
 
