@@ -74,6 +74,9 @@ fn take_path(rest: &mut Vec<String>) -> io::Result<PathBuf> {
 // ------------------------------------------------------------------ config
 
 fn config(mut rest: Vec<String>) -> io::Result<()> {
+    if rest.len() != 1 {
+        usage();
+    }
     let file = rest.pop().unwrap_or_else(|| usage());
     let text = std::fs::read_to_string(&file)?;
     let cfg = cgconfig::parse_cgconfig_in(&file, &text).map_err(io::Error::other)?;
@@ -120,6 +123,9 @@ fn ls(rest: &mut Vec<String>) -> io::Result<()> {
         Some(_) => take_path(rest)?,
         None => mount()?,
     };
+    if !rest.is_empty() {
+        usage();
+    }
     for g in cgfs::list_groups(&base)? {
         println!("{}", g.display());
     }
@@ -131,11 +137,34 @@ fn ls(rest: &mut Vec<String>) -> io::Result<()> {
 fn get(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
     let keys: Vec<String> = if rest.is_empty() {
-        cgfs::CONTROL_FILES.iter().map(|s| s.to_string()).collect()
+        // Enumerate single-line writable knobs plus control files, similar to snapshot.
+        let mut ks: Vec<String> = cgfs::CONTROL_FILES.iter().map(|s| s.to_string()).collect();
+        if let Ok(rd) = std::fs::read_dir(&path) {
+            for e in rd.filter_map(Result::ok) {
+                if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if !ks.contains(&name) && !name.starts_with("cgroup.") {
+                        if let Ok(text) = std::fs::read_to_string(e.path()) {
+                            if !text.contains('\n') || text.trim_end().lines().count() == 1 {
+                                // single-line knob; include
+                                ks.push(name);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        ks
     } else {
         rest.clone()
     };
     for k in &keys {
+        if k.contains('/') || k.contains("..") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("bad key {k:?}"),
+            ));
+        }
         dump(&path.join(k))?;
     }
     Ok(())
@@ -156,8 +185,17 @@ fn dump(file: &Path) -> io::Result<()> {
 
 fn set(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
+    if rest.is_empty() {
+        usage();
+    }
     for kv in rest {
         let (k, v) = kv.split_once('=').unwrap_or_else(|| usage());
+        if k.contains('/') || k.contains("..") || k.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("bad key {k:?}"),
+            ));
+        }
         cgfs::write_file(path.join(k), v)?;
         println!("{k} <- {v}");
     }
@@ -168,6 +206,9 @@ fn set(rest: &mut Vec<String>) -> io::Result<()> {
 
 fn classify(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
+    if rest.is_empty() {
+        usage();
+    }
     for pid in rest {
         let pid: u32 = pid.parse().map_err(|_| bad_pid(pid))?;
         cgfs::attach(&path, pid)?;
@@ -218,6 +259,9 @@ fn delete(rest: &mut Vec<String>) -> io::Result<()> {
         rest.remove(0);
     }
     let path = take_path(rest)?;
+    if !rest.is_empty() {
+        usage();
+    }
     if recursive {
         cgfs::delete_tree(&path)
     } else {
@@ -228,6 +272,9 @@ fn delete(rest: &mut Vec<String>) -> io::Result<()> {
 // ---------------------------------------------------------------- snapshot
 
 fn snapshot_cmd(rest: Vec<String>) -> io::Result<()> {
+    if rest.len() > 1 {
+        usage();
+    }
     let rel = PathBuf::from(
         rest.first()
             .map(|p| p.trim_start_matches('/'))
