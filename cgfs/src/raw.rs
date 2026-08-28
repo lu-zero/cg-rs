@@ -42,17 +42,31 @@ pub fn read_u64(path: impl AsRef<Path>) -> io::Result<Option<u64>> {
     }
 }
 
-/// Overwrite a control file (`cgset` primitive). Appends a trailing newline.
+/// Overwrite a control file (`cgset` primitive). Appends a trailing newline
+/// if the value does not already end with one.
 pub fn write_file(path: impl AsRef<Path>, value: impl AsRef<[u8]>) -> io::Result<()> {
     let mut body = value.as_ref().to_vec();
-    body.push(b'\n');
+    if !body.ends_with(b"\n") {
+        body.push(b'\n');
+    }
     fs::write(path.as_ref(), body)
 }
 
 /// Pids currently in this cgroup.
 pub fn procs(path: impl AsRef<Path>) -> io::Result<Vec<u32>> {
     let text = fs::read_to_string(path.as_ref())?;
-    Ok(text.lines().filter_map(|l| l.parse().ok()).collect())
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let l = line.trim();
+        if l.is_empty() {
+            continue;
+        }
+        let pid: u32 = l.parse().map_err(|e| {
+            io::Error::new(io::ErrorKind::InvalidData, format!("bad pid {l:?}: {e}"))
+        })?;
+        out.push(pid);
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
