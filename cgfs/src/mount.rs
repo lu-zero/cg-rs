@@ -52,7 +52,7 @@ fn unescape_mount(s: &str) -> String {
             let mut oct = String::new();
             for _ in 0..3 {
                 if let Some(&o) = chars.peek() {
-                    if o.is_ascii_octdigit() {
+                    if ('0'..='7').contains(&o) {
                         oct.push(o);
                         chars.next();
                     } else {

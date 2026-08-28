@@ -8,7 +8,7 @@
 //!
 //! [`cgrules.conf(5)`]: https://manpages.debian.org/cgrules.conf.5
 
-use winnow::combinator::{alt, eof, repeat, terminated};
+use winnow::combinator::{alt, repeat, terminated};
 use winnow::prelude::*;
 use winnow::token::{one_of, take_while};
 

@@ -16,6 +16,7 @@ path = "src/main.rs"
 [dependencies]
 cgconfig = { workspace = true }
 cgfs = { workspace = true }
+cg_nss = { workspace = true }
 libc = { workspace = true }
 
 [dev-dependencies]

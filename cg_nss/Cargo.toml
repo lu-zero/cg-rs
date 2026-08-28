@@ -1,0 +1,13 @@
+[package]
+name = "cg_nss"
+description = "NSS name↔id helpers shared by cgctl/cgrulesd"
+keywords = ["cgroup", "nss"]
+categories = ["os::unix-apis"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+libc = { workspace = true }
