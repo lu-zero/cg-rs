@@ -76,8 +76,33 @@ impl LeafSpec {
 /// must not leave `users/` and `lu_zero/` root-owned (delegation wants the
 /// re-assertion libcgroup skipped).
 pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
+    if !spec.path.is_absolute() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("leaf path must be absolute: {:?}", spec.path),
+        ));
+    }
+    if spec.path == Path::new("/") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to apply on filesystem root",
+        ));
+    }
+    for c in &spec.subtree_control {
+        if c.is_empty()
+            || !c
+                .chars()
+                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("invalid controller name {c:?}"),
+            ));
+        }
+    }
     // Collect not-yet-existing components before create_dir_all so they can
-    // be owned/moded afterwards; deepest last.
+    // be owned/moded afterwards; deepest last. TOCTOU on concurrent creator
+    // is benign — the directory will be owned on the next explicit re-apply.
     let mut created: Vec<PathBuf> = Vec::new();
     let mut cur = spec.path.clone();
     while !cur.exists() {
