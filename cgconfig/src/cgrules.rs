@@ -8,7 +8,7 @@
 //!
 //! [`cgrules.conf(5)`]: https://manpages.debian.org/cgrules.conf.5
 
-use winnow::combinator::{alt, repeat};
+use winnow::combinator::{alt, eof, repeat, terminated};
 use winnow::prelude::*;
 use winnow::token::{one_of, take_while};
 
@@ -131,16 +131,35 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
             Controllers::List(list)
         };
 
+        // Strip inline comment: '#' starts comment to EOL unless as part of
+        // escaped \%? Destinations never contain '#', so treat first '#' token
+        // and remainder as comment.
+        let comment_at = toks.iter().position(|t| t.starts_with('#'));
+        let (dest_tok, opts_slice) = if let Some(pos) = comment_at {
+            if pos < 2 {
+                // subject/controllers cannot be comment
+                return Err(err("bad rule: comment before destination".into()));
+            }
+            if pos == 2 {
+                // destination itself is comment — missing destination
+                return Err(err(format!("need at least 3 fields, got 2")));
+            }
+            (toks[2], &toks[3..pos])
+        } else {
+            (toks[2], &toks[3..])
+        };
+        let dest = terminated(dest_token, winnow::combinator::eof)
+            .parse(dest_tok)
+            .map_err(|_| err(format!("bad destination {:?}", dest_tok)))?;
+        if dest.contains('\\') {
+            return Err(err(format!("bad destination {:?}", dest_tok)));
+        }
         rules.push(Rule {
             subject,
             process,
             controllers,
-            destination: Template(
-                dest_token
-                    .parse(toks[2])
-                    .map_err(|_| err(format!("bad destination {:?}", toks[2])))?,
-            ),
-            options: toks[3..].iter().map(|s| unescape(s)).collect(),
+            destination: Template(dest),
+            options: opts_slice.iter().map(|s| unescape(s)).collect(),
         });
     }
     Ok(rules)
@@ -156,7 +175,8 @@ fn parse_subject(s: &str) -> Subject {
 }
 
 /// One destination/options token: `\%` becomes literal `%`,
-/// `%u`-style placeholders are kept verbatim.
+/// `%u`-style placeholders are kept verbatim. Lone `\` is rejected by
+/// requiring `eof` at call site.
 fn dest_token(input: &mut &str) -> ModalResult<String> {
     repeat(
         0..,
