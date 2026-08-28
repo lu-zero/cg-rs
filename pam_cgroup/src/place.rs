@@ -45,6 +45,31 @@ impl Step {
 fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
     let rel = expand(&place.path, user);
     let rel = rel.trim_start_matches('/');
+    if rel.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "place path {:?} resolves to empty (would be mount root)",
+                place.path
+            ),
+        ));
+    }
+    for comp in std::path::Path::new(rel).components() {
+        match comp {
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "place path {:?} contains illegal component {:?}",
+                        place.path, comp
+                    ),
+                ))
+            }
+            _ => {}
+        }
+    }
     Ok(Step {
         path: mount.join(rel),
         uid: resolve_id(&place.uid, user, false)?,
