@@ -307,7 +307,7 @@ impl Rule {
         match (&self.process, process) {
             (None, _) => true,
             (Some(_), None) => false,
-            (Some(rp), Some(p)) => rp == p || p.ends_with(rp),
+            (Some(rp), Some(p)) => rp == p || p.ends_with(&format!("/{}", rp)),
         }
     }
 
