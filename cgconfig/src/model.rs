@@ -110,11 +110,17 @@ impl Template {
 }
 
 fn utf8_step(b: &[u8]) -> usize {
-    match b[0] {
-        0x00..=0x7F => 1,
-        0xC0..=0xDF => 2.min(b.len()),
-        0xE0..=0xEF => 3.min(b.len()),
-        _ => 4.min(b.len()),
+    let c = b[0];
+    if c < 0x80 {
+        1
+    } else if c >= 0xC2 && c <= 0xDF {
+        2.min(b.len())
+    } else if c >= 0xE0 && c <= 0xEF {
+        3.min(b.len())
+    } else if c >= 0xF0 && c <= 0xF4 {
+        4.min(b.len())
+    } else {
+        1
     }
 }
 

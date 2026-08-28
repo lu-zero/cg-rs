@@ -70,11 +70,31 @@ unsafe fn from_passwd(pw: &libc::passwd) -> io::Result<User> {
 }
 
 pub fn expand(template: &str, user: &User) -> String {
-    template
-        .replace("{user}", &user.name)
-        .replace("{uid}", &user.uid.to_string())
-        .replace("{gid}", &user.gid.to_string())
-        .replace("{group}", &user.group)
+    // Single-pass replacement to avoid double expansion when user.name
+    // itself contains "{uid}" etc. (POSIX names cannot, but be precise).
+    let mut out = String::with_capacity(template.len());
+    let mut i = 0;
+    let bytes = template.as_bytes();
+    while i < bytes.len() {
+        if template[i..].starts_with("{user}") {
+            out.push_str(&user.name);
+            i += 6;
+        } else if template[i..].starts_with("{uid}") {
+            out.push_str(&user.uid.to_string());
+            i += 5;
+        } else if template[i..].starts_with("{gid}") {
+            out.push_str(&user.gid.to_string());
+            i += 5;
+        } else if template[i..].starts_with("{group}") {
+            out.push_str(&user.group);
+            i += 7;
+        } else {
+            let ch = template[i..].chars().next().unwrap();
+            out.push(ch);
+            i += ch.len_utf8();
+        }
+    }
+    out
 }
 
 pub fn resolve_id(spec: &str, user: &User, is_gid: bool) -> io::Result<u32> {
