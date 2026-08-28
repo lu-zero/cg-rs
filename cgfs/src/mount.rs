@@ -10,12 +10,12 @@ pub const DEFAULT_MOUNT: &str = "/sys/fs/cgroup";
 
 /// `statfs(2)` superblock magic for cgroup2; a stable kernel ABI value
 /// (linux-raw-sys carries it, rustix does not re-export it).
-const CGROUP2_SUPER_MAGIC: i64 = 0x6367_7270;
+const CGROUP2_SUPER_MAGIC: u64 = 0x6367_7270;
 
 /// True when `path` lives on a cgroup2 filesystem (verified via
 /// `statfs(2)`, not just file presence).
 pub(crate) fn is_cgroup2(path: &Path) -> bool {
-    matches!(statfs(path), Ok(st) if st.f_type == CGROUP2_SUPER_MAGIC)
+    matches!(statfs(path), Ok(st) if st.f_type as u64 == CGROUP2_SUPER_MAGIC)
 }
 
 /// Find the cgroup2 unified hierarchy mount point.
@@ -44,13 +44,57 @@ pub fn find_mount() -> io::Result<PathBuf> {
     ))
 }
 
+fn unescape_mount(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            let mut oct = String::new();
+            for _ in 0..3 {
+                if let Some(&o) = chars.peek() {
+                    if o.is_ascii_octdigit() {
+                        oct.push(o);
+                        chars.next();
+                    } else {
+                        break;
+                    }
+                }
+            }
+            if oct.len() == 3 {
+                if let Ok(v) = u8::from_str_radix(&oct, 8) {
+                    out.push(v as char);
+                    continue;
+                }
+            }
+            out.push('\\');
+            out.push_str(&oct);
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// One `mountinfo` line: `id parent dev root mountpoint opts - fstype …`.
 pub(crate) fn parse_mountinfo_line(line: &str) -> Option<PathBuf> {
-    if !line.contains(" - cgroup2 ") {
+    let sep = " - ";
+    let idx = line.find(sep)?;
+    let (pre, post) = line.split_at(idx);
+    let post = &post[sep.len()..];
+    let fstype = post.split_whitespace().next()?;
+    if fstype != "cgroup2" {
         return None;
     }
-    let fields: Vec<&str> = line.split_whitespace().collect();
-    fields.get(4).map(PathBuf::from)
+    // pre: id parent dev root mountpoint opts...
+    // mountpoint is field 4 (0-indexed) before the separator, with octal escapes.
+    let mut fields: Vec<&str> = Vec::new();
+    // split pre into whitespace fields; mountpoint may contain escaped spaces,
+    // but find separator ensures we are before '-'; escapes remain as \040.
+    for f in pre.split_whitespace() {
+        fields.push(f);
+    }
+    let raw = fields.get(4)?;
+    Some(PathBuf::from(unescape_mount(raw)))
 }
 
 /// This process's cgroup path *relative to* the cgroup2 hierarchy
