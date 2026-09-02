@@ -45,7 +45,7 @@ pub mod v2;
 pub use cgconfig::{parse_cgconfig, parse_cgconfig_in, CgError};
 pub use cgrules::{parse_cgrules, parse_cgrules_in, CrError};
 pub use model::{
-    first_rule, is_safe_relative_path, ConfigFile, Controllers, Identity, Mount, Node, Perm,
-    PermSet, Rule, Subject, Template, Var,
+    first_rule, first_rule_names, is_safe_relative_path, ConfigFile, Controllers, Identity, Mount,
+    Node, Perm, PermSet, Rule, Subject, Template, Var,
 };
-pub use v2::{plan_group, plan_template, LeafPlan};
+pub use v2::{plan_destination, plan_group, plan_template, LeafPlan};

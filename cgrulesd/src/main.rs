@@ -146,8 +146,12 @@ fn run(opts: &Opts) -> io::Result<()> {
                 }
                 if opts.verbose {
                     eprintln!(
-                        "cgrulesd: moved {} placed {} ruleless {} nodest {}",
-                        out.moved, out.already_placed, out.no_rule, out.missing_destination
+                        "cgrulesd: moved {} placed {} ruleless {} nodest {} ignored {}",
+                        out.moved,
+                        out.already_placed,
+                        out.no_rule,
+                        out.missing_destination,
+                        out.ignored
                     );
                 }
             }
@@ -188,6 +192,12 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
         };
         let user = nss::name_from_uid(uid);
         let groups = cache.groups_for(&user, gid);
+        let exe = std::fs::read_link(p.join("exe"))
+            .ok()
+            .map(|t| t.to_string_lossy().into_owned());
+        let Some(starttime) = proc_starttime(&p.join("stat")) else {
+            continue;
+        };
         rows.push(enforce::ProcRow {
             pid,
             user,
@@ -196,32 +206,40 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
             groups,
             comm,
             cgroup,
+            exe,
+            starttime,
         });
     }
     rows
 }
 
-/// Re-read `/proc/<pid>` immediately before it would be attached, to
-/// narrow the window a recycled pid has to slip past `gather()`'s
-/// once-per-pass scan: `enforce_once` may reach this row long after (up to
-/// one full pass's worth of processes later) `gather()` read it, and the
-/// original process could have exited and had its pid reused by an
-/// unrelated one in the meantime. Uid and comm both matching what was
-/// scanned is not a guarantee (a race remains between this check and the
-/// write), but it turns "reused anywhere in the last poll interval" into
-/// "reused between this stat and the cgfs::apply call right after it" —
-/// which still runs the full leaf create/chown/chmod/attach sequence, not
-/// a single write, so the residual window is on the order of tens of
-/// syscalls, not one.
+/// Re-read `/proc/<pid>` immediately before attach so a recycled pid
+/// from later in this pass is not moved. starttime pins the identity
+/// across two processes of the same user with the same comm; a race
+/// remains inside `cgfs::apply` itself.
 fn still_same_process(row: &enforce::ProcRow) -> bool {
     let p = std::path::Path::new("/proc").join(row.pid.to_string());
-    let Some((uid, _gid)) = status_ids(&p.join("status")) else {
+    let Some((uid, gid)) = status_ids(&p.join("status")) else {
         return false;
     };
-    if uid != row.uid {
+    if uid != row.uid || gid != row.gid {
         return false;
     }
-    read_first_line(&p.join("comm")).as_deref() == Some(row.comm.as_str())
+    if read_first_line(&p.join("comm")).as_deref() != Some(row.comm.as_str()) {
+        return false;
+    }
+    proc_starttime(&p.join("stat")) == Some(row.starttime)
+}
+
+/// Field 22 of `/proc/<pid>/stat` (starttime). `comm` can contain
+/// spaces and parentheses, so parse from after the last `)`.
+fn proc_starttime(stat: &std::path::Path) -> Option<u64> {
+    parse_starttime(&std::fs::read_to_string(stat).ok()?)
+}
+
+fn parse_starttime(stat: &str) -> Option<u64> {
+    let rest = stat.rsplit_once(')')?.1;
+    rest.split_whitespace().nth(19)?.parse().ok()
 }
 
 fn read_first_line(p: &std::path::Path) -> Option<String> {
@@ -249,4 +267,19 @@ fn cgroup_rel(file: &std::path::Path) -> Option<String> {
     let text = std::fs::read_to_string(file).ok()?;
     text.lines()
         .find_map(|l| l.strip_prefix("0::").map(str::to_owned))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn starttime_is_field_22_after_comm() {
+        // pid (comm with) parens) state ppid pgrp session tty_nr tpgid flags
+        // minflt cminflt majflt cmajflt utime stime cutime cstime priority
+        // nice num_threads itrealvalue starttime
+        // 20 tokens after `)`: field 3 (state) … field 22 (starttime = 99).
+        let stat = "42 (comm with) parens) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 99";
+        assert_eq!(parse_starttime(stat), Some(99));
+    }
 }

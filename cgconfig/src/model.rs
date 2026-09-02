@@ -331,13 +331,13 @@ pub struct Rule {
     pub controllers: Controllers,
     /// Destination path relative to the hierarchy, placeholders intact.
     pub destination: Template,
-    /// Optional trailing options tokens (e.g. `nore`).
+    /// Optional trailing options tokens (`ignore`, `ignore_rt`, …).
     pub options: Vec<String>,
 }
 
 impl Rule {
-    /// libcgroup first-match semantics over user name, supplementary groups
-    /// and process name (`None` matches rules without a `:process` part).
+    /// Match over user name, supplementary groups and process name
+    /// (`None` matches rules without a `:process` part).
     pub fn matches(&self, user: &str, user_groups: &[String], process: Option<&str>) -> bool {
         let subject_ok = match &self.subject {
             Subject::Any => true,
@@ -350,7 +350,7 @@ impl Rule {
         match (&self.process, process) {
             (None, _) => true,
             (Some(_), None) => false,
-            (Some(rp), Some(p)) => rp == p || p.ends_with(&format!("/{}", rp)),
+            (Some(rp), Some(p)) => process_matches(rp, p),
         }
     }
 
@@ -360,27 +360,84 @@ impl Rule {
             Controllers::List(l) => l.iter().any(|c| c == controller),
         }
     }
+
+    /// A `:process` field that actually narrows the match. `*` is a
+    /// process wildcard, equivalent to omitting `:process`.
+    pub fn is_process_specific(&self) -> bool {
+        matches!(self.process.as_deref(), Some(p) if p != "*")
+    }
+
+    fn option_tokens(&self) -> impl Iterator<Item = &str> {
+        self.options
+            .iter()
+            .flat_map(|o| o.split(','))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
+    /// `ignore` — do not attach a matching process.
+    pub fn ignores(&self) -> bool {
+        self.option_tokens().any(|o| o == "ignore")
+    }
+
+    /// `ignore_rt` — do not attach a matching SCHED_FIFO/SCHED_RR process.
+    pub fn ignores_rt(&self) -> bool {
+        self.option_tokens().any(|o| o == "ignore_rt")
+    }
 }
 
-/// First rule matching user/groups/process, libcgroup precedence: rules
-/// naming a process win over user-only rules; otherwise document order.
+/// Exact name, basename (`/usr/bin/cp` vs `cp`), trailing-`*` prefix
+/// glob (`firefox*`), or a lone `*` matching any process.
+fn process_matches(rule: &str, process: &str) -> bool {
+    if rule == "*" || rule == process {
+        return true;
+    }
+    if let Some(rest) = process.strip_suffix(rule) {
+        if rest.ends_with('/') {
+            return true;
+        }
+    }
+    if let Some(prefix) = rule.strip_suffix('*') {
+        return process.starts_with(prefix);
+    }
+    false
+}
+
+/// First matching rule. Process-specific rules (`user:cmd`) win over
+/// user-only rules regardless of document order, so the man-page example
+/// `student` then `student:cp` actually places `cp`. libcgroup first-match
+/// would apply the earlier user-only line to every process of that user.
 pub fn first_rule<'r>(
     rules: &'r [Rule],
     user: &str,
     user_groups: &[String],
     process: Option<&str>,
 ) -> Option<&'r Rule> {
-    if process.is_some() {
-        if let Some(r) = rules
-            .iter()
-            .find(|r| r.process.is_some() && r.matches(user, user_groups, process))
-        {
+    match process {
+        Some(p) => first_rule_names(rules, user, user_groups, &[p]),
+        None => first_rule_names(rules, user, user_groups, &[]),
+    }
+}
+
+/// Like [`first_rule`], matching if *any* of `names` (comm, exe, basename)
+/// satisfies the process field.
+pub fn first_rule_names<'r>(
+    rules: &'r [Rule],
+    user: &str,
+    user_groups: &[String],
+    names: &[&str],
+) -> Option<&'r Rule> {
+    if !names.is_empty() {
+        if let Some(r) = rules.iter().find(|r| {
+            r.is_process_specific() && names.iter().any(|n| r.matches(user, user_groups, Some(n)))
+        }) {
             return Some(r);
         }
     }
+    let any = names.first().copied();
     rules
         .iter()
-        .find(|r| r.process.is_none() && r.matches(user, user_groups, process))
+        .find(|r| !r.is_process_specific() && r.matches(user, user_groups, any))
 }
 
 #[cfg(test)]
@@ -468,5 +525,80 @@ mod tests {
         assert!(!is_safe_relative_path("apps/."));
         assert!(!is_safe_relative_path("apps/"));
         assert!(is_safe_relative_path("apps/foo")); // ordinary segment, unaffected
+    }
+
+    #[test]
+    fn process_glob_and_basename() {
+        let r = Rule {
+            subject: Subject::User("alice".into()),
+            process: Some("firefox*".into()),
+            controllers: Controllers::All,
+            destination: Template("web".into()),
+            options: vec![],
+        };
+        assert!(r.matches("alice", &[], Some("firefox")));
+        assert!(r.matches("alice", &[], Some("firefox-bin")));
+        assert!(!r.matches("alice", &[], Some("chrome")));
+        assert!(!r.matches("alice", &[], Some("/usr/lib/firefox")));
+        let exact = Rule {
+            process: Some("cp".into()),
+            ..r.clone()
+        };
+        assert!(exact.matches("alice", &[], Some("/usr/bin/cp")));
+
+        let star = Rule {
+            process: Some("*".into()),
+            ..r.clone()
+        };
+        assert!(!star.is_process_specific());
+        assert!(star.matches("alice", &[], Some("anything")));
+        assert!(!star.ignores());
+
+        let ignore = Rule {
+            options: vec!["ignore".into()],
+            process: None,
+            ..r
+        };
+        assert!(ignore.ignores());
+        assert!(!ignore.ignores_rt());
+        let both = Rule {
+            options: vec!["ignore,ignore_rt".into()],
+            ..ignore
+        };
+        assert!(both.ignores() && both.ignores_rt());
+    }
+
+    #[test]
+    fn first_rule_star_process_does_not_steal_user_rules() {
+        let rules = [
+            Rule {
+                subject: Subject::User("alice".into()),
+                process: None,
+                controllers: Controllers::All,
+                destination: Template("alice_default".into()),
+                options: vec![],
+            },
+            Rule {
+                subject: Subject::Any,
+                process: Some("*".into()),
+                controllers: Controllers::All,
+                destination: Template("jobs".into()),
+                options: vec![],
+            },
+        ];
+        assert_eq!(
+            first_rule(&rules, "alice", &[], Some("vim"))
+                .unwrap()
+                .destination
+                .0,
+            "alice_default"
+        );
+        assert_eq!(
+            first_rule_names(&rules, "alice", &[], &["vim", "/usr/bin/vim"])
+                .unwrap()
+                .destination
+                .0,
+            "alice_default"
+        );
     }
 }

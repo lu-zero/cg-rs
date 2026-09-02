@@ -68,6 +68,22 @@ pub fn plan_template(cfg: &ConfigFile, name: &str, id: &Identity) -> Option<Leaf
     ))
 }
 
+/// Exact `group` named `dest` (already expanded) wins; otherwise the
+/// `template` named by the raw rule destination. The `bool` is `true`
+/// when the plan came from a template (on-demand, eligible to reap).
+pub fn plan_destination(
+    cfg: &ConfigFile,
+    dest: &str,
+    template_name: &str,
+    id: &Identity,
+) -> Option<(LeafPlan, bool)> {
+    if cfg.find_group(dest).is_some() {
+        plan_group(cfg, dest, id).map(|p| (p, false))
+    } else {
+        plan_template(cfg, template_name, id).map(|p| (p, true))
+    }
+}
+
 fn plan_node(cfg: &ConfigFile, node: &Node, id: &Identity) -> LeafPlan {
     plan_node_perm(cfg.effective_perm(node), node, id)
 }

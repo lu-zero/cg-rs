@@ -2,8 +2,8 @@
 //!
 //! Sections (`mount`, `group`, `template`, `default`) appear in any order.
 //! Comments run from `#` to end of line. Values may be double-quoted
-//! (libcgroup itself does not implement quotes; we accept them because the
-//! man page examples show `"1000"`).
+//! (the libcgroup lexer strips `"..."` into ID tokens; the man page
+//! examples show `"1000"`).
 //!
 //! Parsers return [`ModalResult`] so committed branches (`cut_err`) and
 //! `.context` labels compose freely.

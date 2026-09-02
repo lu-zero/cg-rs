@@ -219,11 +219,9 @@ template students/%u {
 
     #[test]
     fn embedded_quote_in_a_param_key_refuses_to_render() {
-        // Same injection, the other half of the (controller, key, value)
-        // triple: a param *key* went to the output bare, with no
-        // token()/bare_token() check at all, until this fix. Verified
-        // (before the fix) that a key containing `"{ } group "..` renders
-        // as multiple injected group blocks and re-parses cleanly.
+        // Same injection on the (controller, key, value) triple: a param
+        // key must go through token() so a `"` inside it cannot close a
+        // quoted token and inject extra group blocks.
         use crate::model::{ConfigFile, Node};
         use std::fmt::Write as _;
         let cfg = ConfigFile {

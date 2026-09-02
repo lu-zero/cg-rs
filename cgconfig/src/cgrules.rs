@@ -98,14 +98,17 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
             }
         };
 
-        let toks: Vec<&str> = content.split_whitespace().collect();
+        let toks = match rule_fields(content) {
+            Ok(t) => t,
+            Err(msg) => return Err(err(msg)),
+        };
         if toks.len() < 3 {
             return Err(err(format!("need at least 3 fields, got {}", toks.len())));
         }
 
         let (subject_tok, process) = match toks[0].split_once(':') {
-            Some((u, p)) => (u, Some(p.to_owned())),
-            None => (toks[0], None),
+            Some((u, p)) => (u.to_owned(), Some(unquote(p))),
+            None => (toks[0].clone(), None),
         };
 
         let subject = if subject_tok == "%" {
@@ -118,7 +121,7 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
                 }
             }
         } else {
-            parse_subject(subject_tok)
+            parse_subject(&subject_tok)
         };
 
         let controllers = if toks[1] == "*" {
@@ -131,25 +134,9 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
             Controllers::List(list)
         };
 
-        // Strip inline comment: '#' starts comment to EOL unless as part of
-        // escaped \%? Destinations never contain '#', so treat first '#' token
-        // and remainder as comment.
-        let comment_at = toks.iter().position(|t| t.starts_with('#'));
-        let (dest_tok, opts_slice) = if let Some(pos) = comment_at {
-            if pos < 2 {
-                // subject/controllers cannot be comment
-                return Err(err("bad rule: comment before destination".into()));
-            }
-            if pos == 2 {
-                // destination itself is comment — missing destination
-                return Err(err("need at least 3 fields, got 2".to_string()));
-            }
-            (toks[2], &toks[3..pos])
-        } else {
-            (toks[2], &toks[3..])
-        };
+        let dest_tok = &toks[2];
         let dest = terminated(dest_token, winnow::combinator::eof)
-            .parse(dest_tok)
+            .parse(dest_tok.as_str())
             .map_err(|_| err(format!("bad destination {:?}", dest_tok)))?;
         if dest.contains('\\') {
             return Err(err(format!("bad destination {:?}", dest_tok)));
@@ -159,7 +146,7 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
             process,
             controllers,
             destination: Template(dest),
-            options: opts_slice.iter().map(|s| unescape(s)).collect(),
+            options: toks[3..].iter().map(|s| unescape(s)).collect(),
         });
     }
     Ok(rules)
@@ -172,6 +159,54 @@ fn parse_subject(s: &str) -> Subject {
         _ if s.starts_with('@') => Subject::Group(s[1..].to_owned()),
         _ => Subject::User(s.to_owned()),
     }
+}
+
+/// Whitespace-separated fields that keep quoted spans (including spaces)
+/// as one field. `#` starts a comment only outside quotes.
+fn rule_fields(line: &str) -> Result<Vec<String>, String> {
+    let mut out = Vec::new();
+    let mut s = line;
+    loop {
+        s = s.trim_start_matches([' ', '\t']);
+        if s.is_empty() || s.starts_with('#') {
+            break;
+        }
+        let (field, rest) = next_field(s)?;
+        out.push(field);
+        s = rest;
+    }
+    Ok(out)
+}
+
+fn next_field(s: &str) -> Result<(String, &str), String> {
+    if let Some(inner) = s.strip_prefix('"') {
+        let end = inner
+            .find('"')
+            .ok_or_else(|| "unterminated quote".to_string())?;
+        return Ok((inner[..end].to_owned(), &inner[end + 1..]));
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b' ' | b'\t' | b'#' => break,
+            b'"' => {
+                let rel = s[i + 1..]
+                    .find('"')
+                    .ok_or_else(|| "unterminated quote".to_string())?;
+                i += 2 + rel;
+            }
+            _ => i += 1,
+        }
+    }
+    Ok((s[..i].to_owned(), &s[i..]))
+}
+
+fn unquote(s: &str) -> String {
+    s.strip_prefix('"')
+        .and_then(|x| x.strip_suffix('"'))
+        .unwrap_or(s)
+        .to_owned()
 }
 
 /// One destination/options token: `\%` becomes literal `%`,
@@ -282,5 +317,24 @@ mod tests {
     fn comments_and_blanks_skipped() {
         assert!(parse_cgrules("").unwrap().is_empty());
         assert!(parse_cgrules("# a\n   \n\t#b\nc * d/\n").unwrap().len() == 1);
+    }
+
+    #[test]
+    fn quoted_fields_with_spaces() {
+        let rules =
+            parse_cgrules(r#"@students:"Web Browser" cpu "/usergroup/students/Internet Apps""#)
+                .unwrap();
+        assert_eq!(rules[0].subject, Subject::Group("students".into()));
+        assert_eq!(rules[0].process.as_deref(), Some("Web Browser"));
+        assert_eq!(rules[0].destination.0, "/usergroup/students/Internet Apps");
+    }
+
+    #[test]
+    fn ignore_options_parse() {
+        let rules = parse_cgrules("root:sshd * * ignore").unwrap();
+        assert!(rules[0].ignores());
+        let rules = parse_cgrules("*:irqbalance * * ignore_rt").unwrap();
+        assert!(rules[0].ignores_rt());
+        assert!(!rules[0].ignores());
     }
 }

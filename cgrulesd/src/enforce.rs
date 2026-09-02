@@ -9,7 +9,7 @@ use std::io::{self};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
-use cgconfig::model::{first_rule, ConfigFile, Identity};
+use cgconfig::model::{first_rule_names, ConfigFile, Identity};
 use cgfs::LeafSpec;
 
 /// One process as seen by the poller.
@@ -25,6 +25,10 @@ pub struct ProcRow {
     pub comm: String,
     /// Current cgroup path relative to the hierarchy (`0::` line).
     pub cgroup: String,
+    /// `/proc/<pid>/exe` target, when readable.
+    pub exe: Option<String>,
+    /// `/proc/<pid>/stat` starttime, used to pin identity across reuse.
+    pub starttime: u64,
 }
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -33,6 +37,7 @@ pub struct Outcome {
     pub already_placed: usize,
     pub no_rule: usize,
     pub missing_destination: usize,
+    pub ignored: usize,
 }
 
 /// One enforcement pass. Creates destinations from exact `group` entries
@@ -65,8 +70,13 @@ pub fn enforce_once(
     let mut out = Outcome::default();
     let mut missing: Vec<String> = Vec::new();
     for row in procs {
-        let Some(rule) = first_rule(rules, &row.user, &row.groups, Some(&row.comm)) else {
+        let names = process_names(row);
+        let Some(rule) = first_rule_names(rules, &row.user, &row.groups, &names) else {
             out.no_rule += 1;
+            continue;
+        };
+        if rule.ignores() || (rule.ignores_rt() && is_rt_task(row.pid)) {
+            out.ignored += 1;
             continue;
         };
         let identity = Identity {
@@ -99,27 +109,8 @@ pub fn enforce_once(
             }
             continue;
         };
-        // Track before checking already_placed or calling apply, not
-        // only after a successful apply:
-        //
-        // - already_placed short-circuits every poll after the first for
-        //   a long-lived process. Tracking only on the move that created
-        //   the destination means a process placed by a *previous* daemon
-        //   incarnation (restart, upgrade, config reload) never
-        //   re-registers its destination — tracked_templates is
-        //   in-memory only, so that destination becomes permanently
-        //   invisible to the reaper.
-        // - cgfs::apply creates the directory via mkdir before anything
-        //   that can fail afterwards (chown/chmod/attach), so a failure
-        //   partway through — the common case: gather()'s scanned pid
-        //   has already exited by the time apply() gets to it — must
-        //   not leave an untracked, permanently unreaped directory on
-        //   disk. That is exactly the unbounded growth this tracking
-        //   exists to prevent.
-        //
-        // reap_idle_templates is safe to call on a path that was never
-        // actually created, or that something else already removed: its
-        // rmdir attempt fails with NotFound and it untracks itself.
+        // Track even if apply fails after mkdir, or a restart orphans
+        // the dest from this in-memory set.
         if is_template {
             tracked_templates.insert(spec.path.clone());
         }
@@ -164,33 +155,13 @@ pub fn enforce_once(
     Ok(out)
 }
 
-/// Remove a template-created destination once its `cgroup.procs` is
-/// empty, going further than real cgrulesengd/cgred — the reference
-/// implementation's own man page documents on-demand creation and never
-/// mentions cleanup, so a template destination there grows without bound
-/// for the life of the daemon. Reaps eagerly: the first pass that
-/// observes a tracked path empty tries to remove it, rather than waiting
-/// for sustained emptiness across several passes.
+/// Remove a template-created destination once `cgroup.procs` is empty.
 ///
-/// `cgfs::delete_leaf` is a plain `rmdir`, which the kernel already
-/// refuses (`EBUSY`) on a populated cgroup or one with online children —
-/// so a path that gains a new member between this function's own
-/// empty-check and the delete simply fails to delete and stays tracked
-/// for the next call; nothing gets destroyed out from under a live
-/// occupant. A path that no longer exists at all — already removed by
-/// this function, by `cgctl delete`, by an admin, or never actually
-/// created because `cgfs::apply` failed partway through — is untracked
-/// rather than retried forever: there is nothing left to reap, and an
-/// entry that can never succeed and never gets dropped would leak
-/// memory in exactly the way this feature exists to avoid for the
-/// cgroups themselves.
-///
-/// Call once per poll, after `enforce_once`, only when polling
-/// continuously: a `--once` run's `tracked_templates` starts empty and
-/// only ever gains entries that were *just* attached to, so none of
-/// them will read as empty in that same pass — a `--once` deployment
-/// (e.g. run from cron) never reaps anything, ever, regardless of
-/// whether this is called there.
+/// `delete_leaf` is a plain `rmdir`; the kernel returns `EBUSY` if the
+/// cgroup is populated or has children, so a path that gains a member
+/// between the empty-check and the delete stays tracked. A missing path
+/// is untracked rather than retried. Call after `enforce_once` only when
+/// polling continuously — `--once` never reaps.
 pub fn reap_idle_templates(tracked_templates: &mut HashSet<PathBuf>, verbose: bool) {
     tracked_templates.retain(|path| {
         // A `cgroup.procs` that can't be read (missing entirely, say) is
@@ -226,6 +197,24 @@ pub fn reap_idle_templates(tracked_templates: &mut HashSet<PathBuf>, verbose: bo
     });
 }
 
+fn process_names(row: &ProcRow) -> Vec<&str> {
+    let mut names = vec![row.comm.as_str()];
+    if let Some(exe) = row.exe.as_deref() {
+        names.push(exe);
+        if let Some(base) = exe.rsplit('/').next() {
+            if !base.is_empty() && base != row.comm {
+                names.push(base);
+            }
+        }
+    }
+    names
+}
+
+fn is_rt_task(pid: u32) -> bool {
+    let pol = unsafe { libc::sched_getscheduler(pid as libc::pid_t) };
+    pol == libc::SCHED_FIFO || pol == libc::SCHED_RR
+}
+
 fn dest_path(mount: &Path, dest: &str) -> PathBuf {
     let mut p = mount.to_path_buf();
     for part in dest.split('/') {
@@ -238,27 +227,10 @@ fn dest_path(mount: &Path, dest: &str) -> PathBuf {
 
 /// A resolved destination, and whether it's eligible for reaping once idle.
 ///
-/// Only a *template* match is: it's a destination cgrulesd itself
-/// materialised on demand (real libcgroup's cgrulesengd does the same,
-/// and — per its own man page — never cleans one up either, which is
-/// exactly the unbounded-growth problem this crate goes further than the
-/// reference implementation to avoid). A `group` entry is admin-declared
-/// and meant to persist regardless of occupancy; the ownership-gated
-/// fallback (no config entry at all) only ever matches something that
-/// already existed before cgrulesd touched it, so there's nothing of
-/// cgrulesd's own to reap there either.
-///
-/// Unlike the no-config fallback below (which checks `cgroup.procs`
-/// ownership before accepting an existing directory), a *template* is
-/// trusted as written: nothing here re-verifies that its expansion
-/// doesn't happen to name an existing, unrelated cgroup. A destination
-/// like a bare `template %p { … }` would give a process with a
-/// well-chosen `comm` the same "join an existing sibling cgroup"
-/// leverage the fallback's ownership check exists to close — but the
-/// admin had to write that shallow, placeholder-only template
-/// deliberately (a scoped one like `template apps/%p { … }` isn't
-/// reachable this way), so it's treated as admin intent rather than a
-/// gap to close here too.
+/// Only a *template* match is: cgrulesd materialised it on demand. A
+/// `group` persists by design; the ownership-gated fallback only ever
+/// matches a directory that already existed. A shallow `template %p`
+/// that names an existing sibling is treated as admin intent.
 fn leaf_spec(
     cfg: &ConfigFile,
     dest: &str,
@@ -268,13 +240,9 @@ fn leaf_spec(
 ) -> Option<(LeafSpec, bool)> {
     // Exact group wins by expanded name; otherwise the template named by
     // the *raw* rule destination provides owners/modes/controllers.
-    let is_group = cfg.find_group(dest).is_some();
-    let plan = if is_group {
-        cgconfig::plan_group(cfg, dest, identity)
-    } else {
-        cgconfig::plan_template(cfg, template_name, identity)
-    };
-    if let Some(plan) = plan {
+    if let Some((plan, is_template)) =
+        cgconfig::plan_destination(cfg, dest, template_name, identity)
+    {
         return Some((
             LeafSpec {
                 path: dest_path(mount, dest),
@@ -287,7 +255,7 @@ fn leaf_spec(
                 task_gid: resolve_group(plan.task_gid.as_deref()),
                 subtree_control: plan.subtree_control.clone(),
             },
-            !is_group,
+            is_template,
         ));
     }
 
@@ -405,6 +373,8 @@ mod tests {
             groups: vec!["students".to_owned()],
             comm: "sh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
 
         let out = enforce_once(
@@ -442,6 +412,8 @@ mod tests {
             groups: vec!["students".to_owned()],
             comm: "sh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
 
         let out = enforce_once(
@@ -482,6 +454,8 @@ mod tests {
             groups: vec!["students".to_owned()],
             comm: "sh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
 
         let out = enforce_once(
@@ -517,6 +491,8 @@ mod tests {
             groups: vec![],
             comm: "../../../etc".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
 
         let out = enforce_once(
@@ -536,6 +512,7 @@ mod tests {
                 already_placed: 0,
                 no_rule: 0,
                 missing_destination: 1,
+                ignored: 0,
             }
         );
         // Nothing was ever created anywhere under the sandboxed mount.
@@ -558,6 +535,8 @@ mod tests {
                 groups: vec!["students".to_owned()],
                 comm: "sh".into(),
                 cgroup: "/placed".into(),
+                exe: None,
+                starttime: 0,
             },
             ProcRow {
                 pid: 2,
@@ -567,6 +546,8 @@ mod tests {
                 groups: vec![],
                 comm: "sh".into(),
                 cgroup: "/".into(),
+                exe: None,
+                starttime: 0,
             },
         ];
         let out = enforce_once(
@@ -585,9 +566,42 @@ mod tests {
                 moved: 0,
                 already_placed: 1,
                 no_rule: 1,
-                missing_destination: 0
+                missing_destination: 0,
+                ignored: 0,
             }
         );
+    }
+
+    #[test]
+    fn ignore_option_skips_attach() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, uname) = me();
+        prep_dir(&tmp.path().join("sshd"));
+        let rules = parse_cgrules(&format!("{uname}:sshd * sshd ignore")).unwrap();
+        let cfg = parse_cgconfig("").unwrap();
+        let rows = vec![ProcRow {
+            pid: 99,
+            user: uname,
+            uid,
+            gid,
+            groups: vec![],
+            comm: "sshd".into(),
+            cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
+        }];
+        let out = enforce_once(
+            tmp.path(),
+            &rules,
+            &cfg,
+            &rows,
+            false,
+            |_| true,
+            &mut Default::default(),
+        )
+        .unwrap();
+        assert_eq!(out.ignored, 1);
+        assert_eq!(out.moved, 0);
     }
 
     #[test]
@@ -608,6 +622,8 @@ mod tests {
             groups: vec![],
             comm: "zsh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
         let out = enforce_once(
             tmp.path(),
@@ -654,6 +670,8 @@ mod tests {
             groups: vec![],
             comm: "zsh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
@@ -706,15 +724,12 @@ mod tests {
 
     #[test]
     fn template_destination_is_tracked_even_when_apply_fails_after_mkdir() {
-        // cgfs::apply creates the directory via mkdir before anything
-        // that can fail afterwards — here, chown to uid 0, which an
-        // unprivileged test process cannot do. This is the common real
-        // case too: gather()'s scanned pid has often already exited by
-        // the time apply() gets to attach(), which fails the same way
-        // (after mkdir). A destination must be tracked regardless of
-        // whether apply ultimately succeeds, or the directory leaks
-        // untracked forever — exactly the unbounded growth this
-        // feature exists to prevent.
+        // chown to uid 0 fails unprivileged; as root (or a userns that
+        // maps uid 0) apply would succeed and this would no longer pin
+        // the "tracked despite mkdir-then-fail" path.
+        if unsafe { libc::geteuid() } == 0 {
+            return;
+        }
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
         let cfg_text =
@@ -730,6 +745,8 @@ mod tests {
             groups: vec![],
             comm: "zsh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
@@ -779,6 +796,8 @@ mod tests {
             groups: vec![],
             comm: "zsh".into(),
             cgroup: dest_rel.clone(), // already there
+            exe: None,
+            starttime: 0,
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
@@ -816,6 +835,8 @@ mod tests {
             groups: vec![],
             comm: "zsh".into(),
             cgroup: "/".into(),
+            exe: None,
+            starttime: 0,
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
