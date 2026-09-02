@@ -125,22 +125,28 @@ fn utf8_step(b: &[u8]) -> usize {
 }
 
 /// Whether an expanded [`Template`] is safe to append to a mount-relative
-/// cgroup path: no `..`, no absolute-path component.
+/// cgroup path: no `..`, no absolute-path component, and not empty/`.`-only
+/// (which would resolve to the mount root itself, not a leaf under it).
 ///
 /// Most placeholders (`%u`, `%g`, …) are constrained by the system (a POSIX
 /// username can't contain `/`), but `%p` — process name — comes straight
 /// from `/proc/<pid>/comm`, which any unprivileged process controls
 /// (`prctl(PR_SET_NAME)`). A rule or group destination that embeds `%p`
 /// therefore needs this check on the *expanded* string before it becomes a
-/// filesystem path a privileged caller creates/chowns.
+/// filesystem path a privileged caller creates/chowns/attaches a pid to —
+/// including a `comm` of exactly `.` or empty, which would otherwise
+/// silently target the cgroup root instead of being rejected as malformed.
 pub fn is_safe_relative_path(rel: &str) -> bool {
     use std::path::Component;
-    std::path::Path::new(rel).components().all(|c| {
-        !matches!(
-            c,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    })
+    let mut has_normal = false;
+    for c in std::path::Path::new(rel).components() {
+        match c {
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return false,
+            Component::Normal(_) => has_normal = true,
+            Component::CurDir => {}
+        }
+    }
+    has_normal
 }
 
 /// Resolved identity of a subject, supplied by the caller (passwd/group lookups).
@@ -409,5 +415,33 @@ mod tests {
     fn accepts_ordinary_destinations() {
         assert!(is_safe_relative_path("users/lu_zero/session"));
         assert!(is_safe_relative_path("students/%u")); // unresolved placeholder text is fine
+    }
+
+    #[test]
+    fn rejects_destinations_that_resolve_to_the_mount_root() {
+        // A top-level "%p" destination lets a one-byte comm reach the
+        // mount root itself: comm="." expands straight to ".", and
+        // comm="/" expands to "/" — which enforce_once's
+        // `trim_matches('/')` then reduces to "".
+        let t = Template("%p".into());
+        let dot = Identity {
+            proc_name: ".".into(),
+            ..Default::default()
+        };
+        assert_eq!(t.expand(&dot), ".");
+        assert!(!is_safe_relative_path(&t.expand(&dot)));
+
+        let slash = Identity {
+            proc_name: "/".into(),
+            ..Default::default()
+        };
+        assert_eq!(t.expand(&slash).trim_matches('/'), "");
+        assert!(!is_safe_relative_path(t.expand(&slash).trim_matches('/')));
+
+        assert!(!is_safe_relative_path("."));
+        assert!(!is_safe_relative_path(""));
+        assert!(!is_safe_relative_path("/"));
+        // "." past a real segment is fine — it normalizes away, not out.
+        assert!(is_safe_relative_path("apps/."));
     }
 }

@@ -45,15 +45,11 @@ impl Step {
 fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
     let rel = expand(&place.path, user);
     let rel = rel.trim_start_matches('/');
-    if rel.is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "place path {:?} resolves to empty (would be mount root)",
-                place.path
-            ),
-        ));
-    }
+    // A bare "." (or, after the trim above, "" or "/") resolves to the
+    // mount root itself, not a leaf under it — same illegal-target class
+    // as `..`/absolute, just via the no-op component instead of an
+    // escaping one, so it needs the same rejection.
+    let mut has_normal = false;
     for comp in std::path::Path::new(rel).components() {
         match comp {
             std::path::Component::ParentDir
@@ -67,8 +63,18 @@ fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
                     ),
                 ))
             }
-            _ => {}
+            std::path::Component::Normal(_) => has_normal = true,
+            std::path::Component::CurDir => {}
         }
+    }
+    if !has_normal {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "place path {:?} resolves to empty (would be mount root)",
+                place.path
+            ),
+        ));
     }
     Ok(Step {
         path: mount.join(rel),
@@ -89,4 +95,45 @@ pub fn apply(cfg: &Config, user: &User, pid: u32) -> io::Result<Vec<Step>> {
         cgfs::apply(&step.to_spec(), step.attach.then_some(pid))?;
     }
     Ok(steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Place;
+
+    fn user() -> User {
+        User {
+            name: "lu_zero".into(),
+            uid: 1000,
+            gid: 10,
+            group: "wheel".into(),
+        }
+    }
+
+    fn place(path: &str) -> Place {
+        Place {
+            path: path.into(),
+            uid: "{uid}".into(),
+            gid: "{gid}".into(),
+            mode: 0o775,
+            file_mode: 0o664,
+            subtree_control: vec![],
+            attach: false,
+        }
+    }
+
+    #[test]
+    fn rejects_paths_that_resolve_to_the_mount_root() {
+        for path in [".", "", "/"] {
+            let err = step_for(Path::new("/sys/fs/cgroup"), &place(path), &user()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "path={path:?}");
+        }
+    }
+
+    #[test]
+    fn accepts_an_ordinary_place() {
+        let step = step_for(Path::new("/sys/fs/cgroup"), &place("users/{user}"), &user()).unwrap();
+        assert_eq!(step.path, Path::new("/sys/fs/cgroup/users/lu_zero"));
+    }
 }
