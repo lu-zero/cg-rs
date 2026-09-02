@@ -125,17 +125,20 @@ fn utf8_step(b: &[u8]) -> usize {
 }
 
 /// Whether an expanded [`Template`] is safe to append to a mount-relative
-/// cgroup path: no `..`, no absolute-path component, and not empty/`.`-only
-/// (which would resolve to the mount root itself, not a leaf under it).
+/// cgroup path: no `..`, no absolute-path component, no literal `.`
+/// segment anywhere (including a bare trailing `/`), and not empty (all of
+/// which would resolve to the mount root itself, or — for a trailing `/`
+/// or `.` specifically — make the *final* component of the resulting path
+/// resolve as a directory at the syscall level, transparently following it
+/// if it turns out to be a symlink; see `cgfs::apply`, which guards the
+/// same thing for the identical reason).
 ///
 /// Most placeholders (`%u`, `%g`, …) are constrained by the system (a POSIX
 /// username can't contain `/`), but `%p` — process name — comes straight
 /// from `/proc/<pid>/comm`, which any unprivileged process controls
 /// (`prctl(PR_SET_NAME)`). A rule or group destination that embeds `%p`
 /// therefore needs this check on the *expanded* string before it becomes a
-/// filesystem path a privileged caller creates/chowns/attaches a pid to —
-/// including a `comm` of exactly `.` or empty, which would otherwise
-/// silently target the cgroup root instead of being rejected as malformed.
+/// filesystem path a privileged caller creates/chowns/attaches a pid to.
 pub fn is_safe_relative_path(rel: &str) -> bool {
     use std::path::Component;
     let mut has_normal = false;
@@ -145,6 +148,15 @@ pub fn is_safe_relative_path(rel: &str) -> bool {
             Component::Normal(_) => has_normal = true,
             Component::CurDir => {}
         }
+    }
+    // A literal "." segment (anywhere, trailing included) and a bare
+    // trailing "/" both get normalized away by `Path::components()` —
+    // confirmed empirically (`Path::new("a/.")` and `Path::new("a/")`
+    // both iterate as just `[Normal("a")]`) — so neither is visible to
+    // the loop above. Check the raw bytes instead.
+    let raw = rel.as_bytes();
+    if raw.last() == Some(&b'/') || raw.split(|&b| b == b'/').any(|seg| seg == b".") {
+        return false;
     }
     has_normal
 }
@@ -441,7 +453,20 @@ mod tests {
         assert!(!is_safe_relative_path("."));
         assert!(!is_safe_relative_path(""));
         assert!(!is_safe_relative_path("/"));
-        // "." past a real segment is fine — it normalizes away, not out.
-        assert!(is_safe_relative_path("apps/."));
+    }
+
+    #[test]
+    fn rejects_a_trailing_dot_or_slash_past_a_real_segment() {
+        // A trailing "." or "/" doesn't resolve to the mount root, but it
+        // still makes the *final* component of the resulting filesystem
+        // path resolve as a directory at the syscall level (lstat's
+        // trailing-slash/"/." rule), transparently following it if it
+        // turns out to be a symlink — the same reason cgfs::apply rejects
+        // this spelling. Path::components() can't see either spelling
+        // (both normalize away silently), which is exactly why this
+        // needs its own raw-byte check rather than relying on components().
+        assert!(!is_safe_relative_path("apps/."));
+        assert!(!is_safe_relative_path("apps/"));
+        assert!(is_safe_relative_path("apps/foo")); // ordinary segment, unaffected
     }
 }

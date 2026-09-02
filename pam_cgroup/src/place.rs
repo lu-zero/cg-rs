@@ -76,6 +76,24 @@ fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
             ),
         ));
     }
+    // A literal "." segment (anywhere, trailing included) and a bare
+    // trailing "/" both get normalized away by `Path::components()` —
+    // confirmed empirically (`Path::new("a/.")` and `Path::new("a/")`
+    // both iterate as just `[Normal("a")]`) — so neither is caught by
+    // the loop above. Both matter for the same reason cgfs::apply
+    // rejects them: they make the *final* component of the resulting
+    // path resolve as a directory at the syscall level, transparently
+    // following it if it's a symlink.
+    let raw = rel.as_bytes();
+    if raw.last() == Some(&b'/') || raw.split(|&b| b == b'/').any(|seg| seg == b".") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "place path {:?} contains a literal '.' segment or a trailing slash",
+                place.path
+            ),
+        ));
+    }
     Ok(Step {
         path: mount.join(rel),
         uid: resolve_id(&place.uid, user, false)?,
@@ -135,5 +153,17 @@ mod tests {
     fn accepts_an_ordinary_place() {
         let step = step_for(Path::new("/sys/fs/cgroup"), &place("users/{user}"), &user()).unwrap();
         assert_eq!(step.path, Path::new("/sys/fs/cgroup/users/lu_zero"));
+    }
+
+    #[test]
+    fn rejects_a_trailing_dot_or_slash_past_a_real_segment() {
+        // Same reason cgfs::apply rejects this spelling: it makes the
+        // final component of the resulting path resolve as a directory
+        // at the syscall level, transparently following it if a
+        // delegatee has swapped it for a symlink.
+        for path in ["users/{user}/session/.", "users/{user}/session/"] {
+            let err = step_for(Path::new("/sys/fs/cgroup"), &place(path), &user()).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "path={path:?}");
+        }
     }
 }
