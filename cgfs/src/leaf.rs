@@ -72,10 +72,15 @@ impl LeafSpec {
 
 /// Create / chown / chmod / enable controllers / optionally attach `pid`.
 ///
-/// Ownership and `dperm` apply to *every* directory this call creates, not
-/// just the leaf: a root-run daemon materialising `users/lu_zero/session`
-/// must not leave `users/` and `lu_zero/` root-owned (delegation wants the
-/// re-assertion libcgroup skipped).
+/// Only `spec.path` itself — the leaf — is chowned to `spec.uid`/`spec.gid`.
+/// Directories created along the way to reach it get `dperm` (so they stay
+/// traversable regardless of the caller's umask) but keep their creator's
+/// ownership: a shared ancestor (e.g. `users/`, the parent of every
+/// `users/{user}` leaf) must not end up owned by whichever leaf happens to
+/// materialise it first — that would hand that one delegatee structural
+/// control (mkdir/rmdir/rename) over every sibling leaf under it. A caller
+/// that wants an *intermediate* directory delegated too (as pam_cgroup's
+/// `users/{user}` config entry does) applies it as its own leaf, separately.
 pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
     if !spec.path.is_absolute() {
         return Err(io::Error::new(
@@ -102,14 +107,17 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
         }
     }
     // Collect not-yet-existing components before create_dir_all so they can
-    // be owned/moded afterwards; deepest last. TOCTOU on concurrent creator
-    // is benign — the directory will be owned on the next explicit re-apply.
+    // be moded afterwards; deepest last. TOCTOU on concurrent creator is
+    // benign — the directory will be there on the next explicit re-apply.
     //
-    // Every component is checked with `symlink_metadata`, not `exists()`:
-    // a delegated leaf is owned by the user it was created for, and this
-    // call re-asserts ownership on every re-apply, so a user who swapped
-    // their own (already-existing) leaf for a symlink to some other
-    // directory must not have that directory silently adopted here.
+    // Every ancestor up to `/` is checked with `symlink_metadata`, not just
+    // the deepest existing one: `symlink_metadata` on a path only reports
+    // whether its *final* component is a symlink, so a directory reached by
+    // transparently resolving a symlinked ancestor can still look like an
+    // ordinary already-existing leaf. Stopping at the first "exists" would
+    // walk straight through a symlinked ancestor without ever lstat'ing it
+    // directly; continuing the walk all the way up is what actually lstats
+    // that ancestor's own path component and catches it.
     let mut created: Vec<PathBuf> = Vec::new();
     let mut cur = spec.path.clone();
     loop {
@@ -121,22 +129,20 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
                         format!("refusing to operate through a symlink: {}", cur.display()),
                     ));
                 }
-                break;
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 created.push(cur.clone());
-                let Some(parent) = cur.parent() else {
-                    break;
-                };
-                cur = parent.to_path_buf();
             }
             Err(e) => return Err(e),
         }
+        let Some(parent) = cur.parent() else {
+            break;
+        };
+        cur = parent.to_path_buf();
     }
     fs::create_dir_all(&spec.path)?;
 
     for dir in created.iter().rev() {
-        set_owner(dir, spec.uid, spec.gid)?;
         if let Some(mode) = spec.dperm {
             set_mode(dir, mode)?;
         }
@@ -250,15 +256,23 @@ mod tests {
         let procs = fs::read_to_string(root.join(leaf_rel).join("cgroup.procs")).unwrap();
         assert_eq!(procs, "4242\n");
 
-        // Every created component got owners AND dperm — a plain mkdir
-        // chain would leave 0o755&~umask on the intermediates.
+        // Every created ancestor got dperm — a plain mkdir chain would leave
+        // 0o755&~umask on the intermediates. (uid/gid on the ancestors are
+        // *not* asserted here: `apply` deliberately leaves them at their
+        // creator's identity rather than the leaf's owner — see the doc
+        // comment on `apply` — but this test runs unprivileged, where the
+        // creator's identity and `spec.uid`/`gid` are the same value, so an
+        // ownership assertion here couldn't distinguish the two behaviours
+        // anyway.)
         use std::os::unix::fs::MetadataExt;
-        for rel in ["users", "users/lu_zero", leaf_rel] {
+        for rel in ["users", "users/lu_zero"] {
             let m = fs::metadata(root.join(rel)).unwrap();
-            assert_eq!(m.uid(), uid, "{rel}");
-            assert_eq!(m.gid(), gid, "{rel}");
             assert_eq!(m.permissions().mode() & 0o777, 0o750, "{rel}");
         }
+        let leaf_meta = fs::metadata(root.join(leaf_rel)).unwrap();
+        assert_eq!(leaf_meta.uid(), uid);
+        assert_eq!(leaf_meta.gid(), gid);
+        assert_eq!(leaf_meta.permissions().mode() & 0o777, 0o750);
 
         // Re-apply with no attach: idempotent on existing dirs.
         apply(&spec, None).unwrap();
@@ -307,5 +321,58 @@ mod tests {
         let victim_meta = fs::metadata(&victim).unwrap();
         assert_eq!(victim_meta.permissions().mode() & 0o777, victim_mode_before);
         assert!(!victim.join("cgroup.procs").exists());
+    }
+
+    /// Same attack, one level up: an *ancestor* (not the leaf itself) is
+    /// the symlink, and the path beneath it already exists — so
+    /// `symlink_metadata(spec.path)` alone finds an ordinary-looking
+    /// existing directory and never lstats the symlinked ancestor unless
+    /// the walk keeps going past the first "exists" boundary.
+    #[test]
+    fn refuses_to_reapply_through_a_symlinked_ancestor() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("cg");
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+
+        // victim/session already exists — the path an attacker-controlled
+        // symlinked ancestor resolves into looks like a legitimate,
+        // already-materialised leaf.
+        let victim = tmp.path().join("victim");
+        fs::create_dir_all(victim.join("session")).unwrap();
+        let victim_session_mode_before = fs::metadata(victim.join("session"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+
+        fs::create_dir_all(root.join("users")).unwrap();
+        std::os::unix::fs::symlink(&victim, root.join("users/lu_zero")).unwrap();
+
+        let spec = LeafSpec {
+            path: root.join("users/lu_zero/session"),
+            uid: Some(uid),
+            gid: Some(gid),
+            dperm: Some(0o777),
+            fperm: Some(0o666),
+            task_fperm: None,
+            task_uid: None,
+            task_gid: None,
+            subtree_control: vec![],
+        };
+        let err = apply(&spec, Some(4242)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        assert!(fs::symlink_metadata(root.join("users/lu_zero"))
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let after = fs::metadata(victim.join("session"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(after, victim_session_mode_before);
+        assert!(!victim.join("session/cgroup.procs").exists());
     }
 }
