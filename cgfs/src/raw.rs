@@ -5,6 +5,28 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
+/// Refuse to act on `path` if it is a symlink; a missing path is fine (the
+/// caller is about to create it).
+///
+/// A delegated leaf is owned by the user it was created for, and every
+/// write here (`chown`, `chmod`, `cgroup.procs`/`cgroup.subtree_control`
+/// writes) idempotently re-asserts itself against a path that already
+/// exists, on every re-apply. Without this check, a user who owns their own
+/// leaf could swap it for a symlink to an arbitrary existing directory or
+/// file and have the next root-run re-apply (a PAM session, a cgrulesd poll)
+/// `chown`/`chmod`/write through the symlink instead of failing.
+pub(crate) fn refuse_symlink(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("refusing to operate through a symlink: {}", path.display()),
+        )),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Whole contents of a control file, trimmed.
 pub fn read_string(path: impl AsRef<Path>) -> io::Result<String> {
     Ok(fs::read_to_string(path)?.trim().to_owned())
@@ -43,13 +65,16 @@ pub fn read_u64(path: impl AsRef<Path>) -> io::Result<Option<u64>> {
 }
 
 /// Overwrite a control file (`cgset` primitive). Appends a trailing newline
-/// if the value does not already end with one.
+/// if the value does not already end with one. Refuses to write through a
+/// symlink.
 pub fn write_file(path: impl AsRef<Path>, value: impl AsRef<[u8]>) -> io::Result<()> {
+    let path = path.as_ref();
+    refuse_symlink(path)?;
     let mut body = value.as_ref().to_vec();
     if !body.ends_with(b"\n") {
         body.push(b'\n');
     }
-    fs::write(path.as_ref(), body)
+    fs::write(path, body)
 }
 
 /// Pids currently in this cgroup.
@@ -101,5 +126,18 @@ mod tests {
         write_file(&p, "12").unwrap();
         assert_eq!(fs::read_to_string(&p).unwrap(), "12\n");
         assert_eq!(procs(&p).unwrap(), vec![12]);
+    }
+
+    #[test]
+    fn write_file_refuses_symlink() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("elsewhere");
+        fs::write(&target, "untouched").unwrap();
+        let link = tmp.path().join("cgroup.procs");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = write_file(&link, "12").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "untouched");
     }
 }

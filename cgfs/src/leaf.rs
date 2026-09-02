@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs::chown;
 use rustix::process::{Gid, Uid};
 
+use crate::raw::refuse_symlink;
 use crate::CONTROL_FILES;
 
 /// One leaf to create under the mount point, with resolved numeric owners.
@@ -103,14 +104,34 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
     // Collect not-yet-existing components before create_dir_all so they can
     // be owned/moded afterwards; deepest last. TOCTOU on concurrent creator
     // is benign — the directory will be owned on the next explicit re-apply.
+    //
+    // Every component is checked with `symlink_metadata`, not `exists()`:
+    // a delegated leaf is owned by the user it was created for, and this
+    // call re-asserts ownership on every re-apply, so a user who swapped
+    // their own (already-existing) leaf for a symlink to some other
+    // directory must not have that directory silently adopted here.
     let mut created: Vec<PathBuf> = Vec::new();
     let mut cur = spec.path.clone();
-    while !cur.exists() {
-        created.push(cur.clone());
-        let Some(parent) = cur.parent() else {
-            break;
-        };
-        cur = parent.to_path_buf();
+    loop {
+        match fs::symlink_metadata(&cur) {
+            Ok(meta) => {
+                if meta.file_type().is_symlink() {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidInput,
+                        format!("refusing to operate through a symlink: {}", cur.display()),
+                    ));
+                }
+                break;
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                created.push(cur.clone());
+                let Some(parent) = cur.parent() else {
+                    break;
+                };
+                cur = parent.to_path_buf();
+            }
+            Err(e) => return Err(e),
+        }
     }
     fs::create_dir_all(&spec.path)?;
 
@@ -169,22 +190,27 @@ pub fn attach(path: &Path, pid: u32) -> io::Result<()> {
 }
 
 /// Change ownership of an existing path; `None` leaves the side unchanged.
+/// Refuses to follow a symlink.
 pub fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
+    refuse_symlink(path)?;
     chown(path, uid.map(Uid::from_raw), gid.map(Gid::from_raw)).map_err(io::Error::from)
 }
 
-/// chmod an existing path (octal mode bits).
+/// chmod an existing path (octal mode bits). Refuses to follow a symlink.
 pub fn set_mode(path: &Path, mode: u32) -> io::Result<()> {
+    refuse_symlink(path)?;
     let mut perms = fs::metadata(path)?.permissions();
     perms.set_mode(mode);
     fs::set_permissions(path, perms)
 }
 
 fn write(path: impl AsRef<Path>, body: impl AsRef<[u8]>) -> io::Result<()> {
+    let path = path.as_ref();
+    refuse_symlink(path)?;
     let bytes = body.as_ref();
     let s = String::from_utf8_lossy(bytes);
     let trimmed = s.trim_end_matches(['\n', '\r']);
-    fs::write(path.as_ref(), format!("{trimmed}\n"))
+    fs::write(path, format!("{trimmed}\n"))
 }
 
 #[cfg(test)]
@@ -236,5 +262,50 @@ mod tests {
 
         // Re-apply with no attach: idempotent on existing dirs.
         apply(&spec, None).unwrap();
+    }
+
+    /// The attack this guards against: a re-apply against a leaf a user
+    /// swapped for a symlink must not chown/chmod/attach through it.
+    #[test]
+    fn refuses_to_reapply_through_a_symlinked_leaf() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("cg");
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+
+        // A directory the "attacker" does not own and must not be able to
+        // get chowned/chmoded/attached-into via the leaf below.
+        let victim = tmp.path().join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        let victim_mode_before = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+
+        let leaf_rel = "users/lu_zero/session";
+        let leaf = root.join(leaf_rel);
+        fs::create_dir_all(leaf.parent().unwrap()).unwrap();
+        std::os::unix::fs::symlink(&victim, &leaf).unwrap();
+
+        let spec = LeafSpec {
+            path: leaf.clone(),
+            uid: Some(uid),
+            gid: Some(gid),
+            dperm: Some(0o777),
+            fperm: Some(0o666),
+            task_fperm: None,
+            task_uid: None,
+            task_gid: None,
+            subtree_control: vec![],
+        };
+        let err = apply(&spec, Some(4242)).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+
+        // The symlink is untouched and the victim directory was never
+        // chowned/chmoded/written into.
+        assert!(fs::symlink_metadata(&leaf)
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        let victim_meta = fs::metadata(&victim).unwrap();
+        assert_eq!(victim_meta.permissions().mode() & 0o777, victim_mode_before);
+        assert!(!victim.join("cgroup.procs").exists());
     }
 }
