@@ -59,6 +59,17 @@ pub fn enforce_once(
         };
         let dest = identity.expand(&rule.destination);
         let dest = dest.trim_matches('/').to_owned();
+        // %p expands from /proc/<pid>/comm, which the process itself
+        // controls; refuse a destination a crafted comm walked out of the
+        // cgroup mount tree instead of building a path from it.
+        if !cgconfig::model::is_safe_relative_path(&dest) {
+            out.missing_destination += 1;
+            eprintln!(
+                "cgrulesd: pid {} rule destination {:?} has illegal path components after expansion, skipping",
+                row.pid, dest
+            );
+            continue;
+        }
         if norm(&row.cgroup) == dest {
             out.already_placed += 1;
             continue;
@@ -251,6 +262,39 @@ mod tests {
         let procs =
             fs::read_to_string(tmp.path().join(format!("students/{uname}/cgroup.procs"))).unwrap();
         assert_eq!(procs, "4242\n");
+    }
+
+    #[test]
+    fn skips_traversal_in_expanded_proc_name() {
+        // %p expands from the process's own comm, which it fully controls.
+        // A rule destination that embeds %p must not let a crafted comm
+        // walk the destination out of the (sandboxed, here tmp) mount tree.
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, uname) = me();
+        let rules = parse_cgrules(&format!("{uname} * apps/%p")).unwrap();
+        let cfg = parse_cgconfig("").unwrap();
+        let rows = vec![ProcRow {
+            pid: 9999,
+            user: uname.clone(),
+            uid,
+            gid,
+            groups: vec![],
+            comm: "../../../etc".into(),
+            cgroup: "/".into(),
+        }];
+
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false).unwrap();
+        assert_eq!(
+            out,
+            Outcome {
+                moved: 0,
+                already_placed: 0,
+                no_rule: 0,
+                missing_destination: 1,
+            }
+        );
+        // Nothing was ever created anywhere under the sandboxed mount.
+        assert!(fs::read_dir(tmp.path()).unwrap().next().is_none());
     }
 
     #[test]

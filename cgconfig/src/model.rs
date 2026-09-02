@@ -124,6 +124,25 @@ fn utf8_step(b: &[u8]) -> usize {
     }
 }
 
+/// Whether an expanded [`Template`] is safe to append to a mount-relative
+/// cgroup path: no `..`, no absolute-path component.
+///
+/// Most placeholders (`%u`, `%g`, …) are constrained by the system (a POSIX
+/// username can't contain `/`), but `%p` — process name — comes straight
+/// from `/proc/<pid>/comm`, which any unprivileged process controls
+/// (`prctl(PR_SET_NAME)`). A rule or group destination that embeds `%p`
+/// therefore needs this check on the *expanded* string before it becomes a
+/// filesystem path a privileged caller creates/chowns.
+pub fn is_safe_relative_path(rel: &str) -> bool {
+    use std::path::Component;
+    std::path::Path::new(rel).components().all(|c| {
+        !matches!(
+            c,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    })
+}
+
 /// Resolved identity of a subject, supplied by the caller (passwd/group lookups).
 #[derive(Clone, Debug, Default)]
 pub struct Identity {
@@ -369,5 +388,26 @@ mod tests {
         let t = Template("%U-%G-%P".into());
         let id = Identity::default();
         assert_eq!(t.expand(&id), "%U-%G-%P");
+    }
+
+    #[test]
+    fn rejects_traversal_in_expanded_proc_name() {
+        // %p is process-controlled (/proc/<pid>/comm): a rule "apps/%p"
+        // must not let a crafted comm walk the destination out of the
+        // cgroup mount tree.
+        let t = Template("apps/%p".into());
+        let id = Identity {
+            proc_name: "../../../etc".into(),
+            ..Default::default()
+        };
+        let dest = t.expand(&id);
+        assert_eq!(dest, "apps/../../../etc");
+        assert!(!is_safe_relative_path(&dest));
+    }
+
+    #[test]
+    fn accepts_ordinary_destinations() {
+        assert!(is_safe_relative_path("users/lu_zero/session"));
+        assert!(is_safe_relative_path("students/%u")); // unresolved placeholder text is fine
     }
 }
