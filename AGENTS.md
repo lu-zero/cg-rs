@@ -53,7 +53,13 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
 - `cgrulesd/` — poll-based enforcement of cgrules.conf; destinations
   resolve exact group first, then template by raw rule destination;
-  existing dirs without config entry are valid targets.
+  an existing dir without a config entry is a valid target only when
+  its `cgroup.procs` is already owned by the matched identity (not a
+  bare ownership-agnostic fallback — a placeholder-derived destination,
+  e.g. bare `%p`, must not be able to pick an arbitrary existing
+  sibling cgroup just by naming it). A literal, placeholder-free
+  destination shared by several users needs a real group/template
+  entry; no single uid owns a genuinely shared `cgroup.procs`.
 
 Shared metadata lives in `[workspace.package]`; shared deps in
 `[workspace.dependencies]`. Member manifests use `workspace = true`

@@ -4,7 +4,9 @@
 //! matching/moving logic is testable without a live `/proc`.
 
 use std::collections::HashMap;
+use std::fs;
 use std::io::{self};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use cgconfig::model::{first_rule, ConfigFile, Identity};
@@ -169,12 +171,28 @@ fn leaf_spec(
         });
     }
 
-    // No config entry: an existing directory (created by PAM or the admin)
-    // is still a valid destination; only ownership stays untouched.
+    // No config entry: an existing directory (created by PAM or the
+    // admin) is still a valid destination, but only when its
+    // cgroup.procs is *already* owned by the identity being placed.
+    // Without that check, a destination containing an attacker-facing
+    // placeholder (%p is /proc/<pid>/comm, which any process controls)
+    // could name any existing sibling cgroup just by matching its path —
+    // e.g. a rule destination of "%p" with comm = "system.slice" — and
+    // get moved into whatever limits that cgroup happens to carry,
+    // instead of only ever reaching a cgroup that was already theirs.
+    // This means a literal, placeholder-free destination shared by
+    // several different users (e.g. "@devs * shared_pool") now needs a
+    // real cgconfig.conf group/template entry: no single uid owns a
+    // genuinely shared cgroup.procs, so this fallback can no longer
+    // serve that case.
     let path = dest_path(mount, dest);
-    path.join("cgroup.procs")
-        .exists()
-        .then(|| LeafSpec::new(path))
+    let procs = path.join("cgroup.procs");
+    let owned_by_identity = identity.uid.parse::<u32>().ok().is_some_and(|uid| {
+        fs::metadata(&procs)
+            .map(|m| m.uid() == uid)
+            .unwrap_or(false)
+    });
+    owned_by_identity.then(|| LeafSpec::new(path))
 }
 
 fn resolve_user(name: Option<&str>) -> Option<u32> {
@@ -302,6 +320,37 @@ mod tests {
         let procs =
             fs::read_to_string(tmp.path().join(format!("students/{uname}/cgroup.procs"))).unwrap();
         assert_eq!(procs, "", "pid must not have been attached");
+    }
+
+    #[test]
+    fn no_config_fallback_requires_matching_ownership() {
+        // The existing-directory fallback (no cgconfig.conf entry) must
+        // not let a process join a cgroup it doesn't already own —
+        // otherwise a rule destination containing %p could pick any
+        // existing sibling cgroup just by matching its name (comm is
+        // fully process-controlled).
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, _uname) = me();
+        // Owned by the test process itself, not by the row below.
+        prep_dir(&tmp.path().join("existing"));
+
+        let rules = parse_cgrules("@students * existing").unwrap();
+        let cfg = parse_cgconfig("").unwrap();
+        let rows = vec![ProcRow {
+            pid: 4242,
+            user: "someone_else".into(),
+            uid: uid.wrapping_add(1), // deliberately not the directory's owner
+            gid,
+            groups: vec!["students".to_owned()],
+            comm: "sh".into(),
+            cgroup: "/".into(),
+        }];
+
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false, |_| true).unwrap();
+        assert_eq!(out.moved, 0, "{out:?}");
+        assert_eq!(out.missing_destination, 1, "{out:?}");
+        let procs = fs::read_to_string(tmp.path().join("existing/cgroup.procs")).unwrap();
+        assert_eq!(procs, "", "must not attach to a cgroup it doesn't own");
     }
 
     #[test]
