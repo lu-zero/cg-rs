@@ -39,11 +39,13 @@
 pub mod cgconfig;
 pub mod cgrules;
 pub mod display;
+pub mod load;
 pub mod model;
 pub mod v2;
 
 pub use cgconfig::{parse_cgconfig, parse_cgconfig_in, CgError};
 pub use cgrules::{parse_cgrules, parse_cgrules_in, CrError};
+pub use load::{load_cgrules, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
 pub use model::{
     first_rule, first_rule_names, is_safe_relative_path, ConfigFile, Controllers, Identity, Mount,
     Node, Perm, PermSet, Rule, Subject, Template, Var,

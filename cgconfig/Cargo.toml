@@ -17,6 +17,7 @@ miette = { workspace = true }
 
 [dev-dependencies]
 miette = { workspace = true, features = ["fancy-no-backtrace"] }
+tempfile = { workspace = true }
 
 [package.metadata.docs.rs]
 all-features = true

@@ -9,23 +9,26 @@ use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
-use cgconfig::{parse_cgconfig_in, parse_cgrules};
+use cgconfig::{load_cgrules, parse_cgconfig_in, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
 
 fn usage() -> ! {
     eprintln!(
-        "usage: cgrulesd [--config FILE] [--cgconfig FILE]
-                 [--interval SECS] [--once] [--verbose]
+        "usage: cgrulesd [--config FILE] [--config-dir DIR] [--no-config-dir]
+                 [--cgconfig FILE] [--interval SECS] [--once] [--verbose]
 
-  --config FILE    rules file (default /etc/cgrules.conf)
-  --cgconfig FILE  optional cgconfig.conf providing groups/templates
-  --interval SECS  seconds between passes (default 5; implies not --once)
-  --once           run a single pass and exit"
+  --config FILE      rules file (default {DEFAULT_CGRULES})
+  --config-dir DIR   drop-in directory (default {DEFAULT_CGRULES_DIR})
+  --no-config-dir    do not read a drop-in directory
+  --cgconfig FILE    optional cgconfig.conf providing groups/templates
+  --interval SECS    seconds between passes (default 5; implies not --once)
+  --once             run a single pass and exit"
     );
     std::process::exit(2)
 }
 
 struct Opts {
     config: PathBuf,
+    config_dir: Option<PathBuf>,
     cgconfig: Option<PathBuf>,
     interval: u64,
     once: bool,
@@ -34,7 +37,8 @@ struct Opts {
 
 fn parse_opts() -> Opts {
     let mut o = Opts {
-        config: PathBuf::from("/etc/cgrules.conf"),
+        config: PathBuf::from(DEFAULT_CGRULES),
+        config_dir: Some(PathBuf::from(DEFAULT_CGRULES_DIR)),
         cgconfig: None,
         interval: 5,
         once: false,
@@ -50,6 +54,8 @@ fn parse_opts() -> Opts {
         };
         match a.as_str() {
             "--config" => o.config = val("--config").into(),
+            "--config-dir" => o.config_dir = Some(val("--config-dir").into()),
+            "--no-config-dir" => o.config_dir = None,
             "--cgconfig" => o.cgconfig = Some(val("--cgconfig").into()),
             "--interval" => o.interval = val("--interval").parse().unwrap_or_else(|_| usage()),
             "--once" => o.once = true,
@@ -72,8 +78,7 @@ fn main() -> std::process::ExitCode {
 }
 
 fn load(opts: &Opts) -> io::Result<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> {
-    let text = std::fs::read_to_string(&opts.config)?;
-    let rules = parse_cgrules(&text).map_err(io::Error::other)?;
+    let rules = load_cgrules(&opts.config, opts.config_dir.as_deref())?;
     let cfg = match &opts.cgconfig {
         Some(f) => {
             let t = std::fs::read_to_string(f)?;

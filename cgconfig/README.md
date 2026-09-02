@@ -11,7 +11,8 @@ translation layer to **cgroup v2** leaves.
   `perm { task admin }` with `uid`/`gid`/`dperm`/`fperm`, controller blocks.
 - `cgrules.conf(5)` — `<user>[:<process>] <controllers> <destination>` rules
   with `@group`, wildcard, ditto `%`, and `%u %U %g %G %p %P` placeholders
-  (`\%` escapes).
+  (`\%` escapes). `load_cgrules` also reads a drop-in directory
+  (`/etc/cgrules.d`), files sorted by name.
 - `model` — shared types and placeholder expansion. libc-free: user/group
   resolution stays with the caller (`Identity`).
 - `v2` — expand a group/template into a `LeafPlan` (path, owners, modes,

@@ -51,7 +51,9 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   (earlier versions ignore the key and install the legacy layout).
 - `cgctl/` — busybox CLI over cgconfig+cgfs (`config`, `ls`, `get`,
   `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
-- `cgrulesd/` — poll-based enforcement of cgrules.conf; destinations
+- `cgrulesd/` — poll-based enforcement of cgrules.conf plus `/etc/cgrules.d`
+  (sorted drop-ins; missing dir is fine; `--no-config-dir` skips them).
+  Destinations
   resolve exact group first, then template by raw rule destination;
   an existing dir without a config entry is a valid target only when
   its `cgroup.procs` is already owned by the matched identity (not a
