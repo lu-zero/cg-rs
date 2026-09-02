@@ -4,7 +4,7 @@
 use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use rustix::fs::chown;
 use rustix::process::{Gid, Uid};
@@ -94,6 +94,42 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
             "refusing to apply on filesystem root",
         ));
     }
+    // `..` must not appear anywhere. `Path::components()` preserves each
+    // `..` as a literal `ParentDir` without trying to lexically cancel it
+    // against an earlier component, so this check is reliable for it.
+    if spec
+        .path
+        .components()
+        .any(|c| !matches!(c, Component::RootDir | Component::Normal(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("leaf path must not contain '..': {:?}", spec.path),
+        ));
+    }
+    // A literal "." segment — anywhere, including a bare trailing "/" —
+    // is checked on the raw bytes instead of `.components()`, which
+    // normalizes *both* away silently before this function ever sees
+    // them (confirmed: `Path::new("a/.").components()` and
+    // `Path::new("a/").components()` both yield just `[Normal("a")]`,
+    // with nothing marking the "." or trailing "/" at all). That
+    // normalization matters here because `symlink_metadata` — which the
+    // ancestor walk below and `set_owner`/`set_mode` rely on to refuse a
+    // symlink — only inspects a path's *final* component, and `lstat` on
+    // a path ending in "/" or "/." is specified to resolve that final
+    // component as a directory, transparently following it if it's a
+    // symlink. So the non-normalized spelling has to be rejected before
+    // any lstat happens, not detected by one.
+    let raw = spec.path.as_os_str().as_encoded_bytes();
+    if raw.last() == Some(&b'/') || raw.split(|&b| b == b'/').any(|seg| seg == b".") {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "leaf path must not contain '.' or a trailing slash: {:?}",
+                spec.path
+            ),
+        ));
+    }
     for c in &spec.subtree_control {
         if c.is_empty()
             || !c
@@ -144,7 +180,15 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
 
     for dir in created.iter().rev() {
         if let Some(mode) = spec.dperm {
-            set_mode(dir, mode)?;
+            // Ancestors stay root-owned (above), but a permissive dperm
+            // (e.g. 0775, common for a delegated leaf) would still hand
+            // every delegatee group/other *write* on a directory shared
+            // with sibling leaves — the same structural control the
+            // ownership choice above exists to avoid, just via mode
+            // instead of owner. Keep dperm's read/execute (so a
+            // delegatee can still traverse through to their own leaf)
+            // but strip group/other write unconditionally on ancestors.
+            set_mode(dir, mode & !0o022)?;
         }
     }
     set_owner(&spec.path, spec.uid, spec.gid)?;
@@ -374,5 +418,87 @@ mod tests {
             & 0o777;
         assert_eq!(after, victim_session_mode_before);
         assert!(!victim.join("session/cgroup.procs").exists());
+    }
+
+    /// `lstat`'s "final component" is defined by trailing-slash/`/.`
+    /// resolution rules, not by the literal string: a path ending in `/`
+    /// or `/.` forces that component to resolve as a directory, silently
+    /// following it if it's a symlink — so `symlink_metadata` alone never
+    /// sees a symlinked leaf spelled this way. `apply` must reject the
+    /// non-normalized spelling itself, before any lstat.
+    #[test]
+    fn refuses_a_leaf_path_with_a_trailing_slash_or_dot() {
+        let tmp = tempfile::tempdir().unwrap();
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+
+        let victim = tmp.path().join("victim");
+        fs::create_dir_all(&victim).unwrap();
+        let victim_mode_before = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+
+        let root = tmp.path().join("cg");
+        fs::create_dir_all(&root).unwrap();
+        let link = root.join("evil");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        for tail in ["evil/", "evil/."] {
+            let spec = LeafSpec {
+                path: root.join(tail),
+                uid: Some(uid),
+                gid: Some(gid),
+                dperm: Some(0o777),
+                fperm: None,
+                task_fperm: None,
+                task_uid: None,
+                task_gid: None,
+                subtree_control: vec![],
+            };
+            let err = apply(&spec, None).unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "tail={tail:?}");
+        }
+
+        let after = fs::metadata(&victim).unwrap().permissions().mode() & 0o777;
+        assert_eq!(after, victim_mode_before, "victim must be untouched");
+    }
+
+    /// A shared ancestor gets dperm's read/execute (so delegatees can
+    /// traverse through it) but never group/other write, regardless of
+    /// what dperm says — a permissive dperm must not let every delegatee
+    /// mkdir/rmdir/rename siblings under it.
+    #[test]
+    fn strips_write_bits_from_ancestor_directories() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("cg");
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+
+        let spec = LeafSpec {
+            path: root.join("users/lu_zero/session"),
+            uid: Some(uid),
+            gid: Some(gid),
+            dperm: Some(0o777),
+            fperm: None,
+            task_fperm: None,
+            task_uid: None,
+            task_gid: None,
+            subtree_control: vec![],
+        };
+        apply(&spec, None).unwrap();
+
+        for ancestor in ["users", "users/lu_zero"] {
+            let mode = fs::metadata(root.join(ancestor))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777;
+            assert_eq!(mode, 0o755, "{ancestor}: dperm's write bits leaked");
+        }
+        // The leaf itself keeps the full configured dperm.
+        let leaf_mode = fs::metadata(root.join("users/lu_zero/session"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(leaf_mode, 0o777);
     }
 }
