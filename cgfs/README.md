@@ -22,15 +22,22 @@ let spec = LeafSpec {
     dperm: Some(0o775),
     fperm: Some(0o664),
     task_fperm: None,
+    task_uid: None,
+    task_gid: None,
     subtree_control: vec!["cpu".into(), "memory".into()],
 };
 cgfs::apply(&spec, Some(std::process::id()))?;
 ```
 
 - **apply** — mkdir, chown, chmod (`dperm`/`fperm`/`task_fperm`),
-  `+ctrl +ctrl` into `cgroup.subtree_control`, optional pid attach.
-  Ownership/modes are re-asserted on existing directories (delegation wants
-  what libcgroup skipped).
+  `+ctrl +ctrl` into `cgroup.subtree_control`, optional pid attach. Only
+  the leaf itself (`spec.path`) is chowned to `uid`/`gid` and re-asserted
+  on every re-apply (delegation wants what libcgroup skipped); ancestors
+  created along the way get `dperm`'s read/execute but never group/other
+  write, and keep their creator's ownership — a shared ancestor must not
+  end up delegated to whichever leaf happens to materialise it first.
+  Refuses a `path` containing `..`, a literal `.` segment, or a trailing
+  `/`, and refuses to operate through a symlink anywhere in the chain.
 - **delete_tree / delete_leaf** — children-first rmdir; refuses to remove
   the mount point itself; as strict as the kernel about non-empty dirs.
 - **list_groups** — relative, sorted walker.

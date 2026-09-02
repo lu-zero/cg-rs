@@ -182,7 +182,10 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
 /// unrelated one in the meantime. Uid and comm both matching what was
 /// scanned is not a guarantee (a race remains between this check and the
 /// write), but it turns "reused anywhere in the last poll interval" into
-/// "reused in the time between this stat and the next write."
+/// "reused between this stat and the cgfs::apply call right after it" —
+/// which still runs the full leaf create/chown/chmod/attach sequence, not
+/// a single write, so the residual window is on the order of tens of
+/// syscalls, not one.
 fn still_same_process(row: &enforce::ProcRow) -> bool {
     let p = std::path::Path::new("/proc").join(row.pid.to_string());
     let Some((uid, _gid)) = status_ids(&p.join("status")) else {
