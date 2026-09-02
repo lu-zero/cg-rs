@@ -35,12 +35,24 @@ pub struct Outcome {
 
 /// One enforcement pass. Creates destinations from exact `group` entries
 /// or same-named `template`s; unmatched destinations are skipped loudly.
+///
+/// `revalidate` is checked immediately before a matched process is
+/// actually attached — not at match time — to narrow the classic
+/// `/proc`-scan pid-reuse race: `procs` was read once, up front, and a
+/// pid can exit and be recycled for an unrelated (possibly privileged)
+/// process before its turn to be moved comes up, potentially hundreds of
+/// rows later. A `false` here means "no longer the process we scanned";
+/// the row is skipped, not attached. Production wires this to a fresh
+/// `/proc/<pid>` re-read (see `main::still_same_process`); tests pass a
+/// stub so the matching/moving logic stays testable without a live
+/// `/proc` (the module doc comment's "pure-ish by design").
 pub fn enforce_once(
     mount: &Path,
     rules: &[cgconfig::Rule],
     cfg: &ConfigFile,
     procs: &[ProcRow],
     verbose: bool,
+    revalidate: impl Fn(&ProcRow) -> bool,
 ) -> io::Result<Outcome> {
     let mut out = Outcome::default();
     let mut missing: Vec<String> = Vec::new();
@@ -82,6 +94,15 @@ pub fn enforce_once(
             }
             continue;
         };
+        if !revalidate(row) {
+            if verbose {
+                eprintln!(
+                    "cgrulesd: pid {} no longer matches its scanned identity (recycled?), skipping",
+                    row.pid
+                );
+            }
+            continue;
+        }
         if let Err(e) = cgfs::apply(&spec, Some(row.pid)) {
             if e.kind() == io::ErrorKind::NotFound
                 || e.raw_os_error() == Some(libc::ESRCH)
@@ -257,11 +278,39 @@ mod tests {
             cgroup: "/".into(),
         }];
 
-        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false).unwrap();
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false, |_| true).unwrap();
         assert_eq!(out.moved, 1, "{out:?}");
         let procs =
             fs::read_to_string(tmp.path().join(format!("students/{uname}/cgroup.procs"))).unwrap();
         assert_eq!(procs, "4242\n");
+    }
+
+    #[test]
+    fn skips_a_pid_that_no_longer_revalidates() {
+        // A `revalidate` returning false means the pid was recycled between
+        // the /proc scan and this row's turn to be moved — the row must be
+        // skipped, not attached.
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, uname) = me();
+        prep_dir(&tmp.path().join(format!("students/{uname}")));
+
+        let rules = parse_cgrules("@students * students/%u").unwrap();
+        let cfg = parse_cgconfig("").unwrap();
+        let rows = vec![ProcRow {
+            pid: 4242,
+            user: uname.clone(),
+            uid,
+            gid,
+            groups: vec!["students".to_owned()],
+            comm: "sh".into(),
+            cgroup: "/".into(),
+        }];
+
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false, |_| false).unwrap();
+        assert_eq!(out.moved, 0, "{out:?}");
+        let procs =
+            fs::read_to_string(tmp.path().join(format!("students/{uname}/cgroup.procs"))).unwrap();
+        assert_eq!(procs, "", "pid must not have been attached");
     }
 
     #[test]
@@ -283,7 +332,7 @@ mod tests {
             cgroup: "/".into(),
         }];
 
-        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false).unwrap();
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false, |_| true).unwrap();
         assert_eq!(
             out,
             Outcome {
@@ -324,7 +373,7 @@ mod tests {
                 cgroup: "/".into(),
             },
         ];
-        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false).unwrap();
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, false, |_| true).unwrap();
         assert_eq!(
             out,
             Outcome {
@@ -355,7 +404,7 @@ mod tests {
             comm: "zsh".into(),
             cgroup: "/".into(),
         }];
-        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, true).unwrap();
+        let out = enforce_once(tmp.path(), &rules, &cfg, &rows, true, |_| true).unwrap();
         assert_eq!(out.moved, 1, "{out:?}");
 
         // destination expands with the user's own name:

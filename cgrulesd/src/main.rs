@@ -99,7 +99,14 @@ fn run(opts: &Opts) -> io::Result<()> {
                     }
                 };
                 let rows = gather(std::process::id());
-                let out = match enforce::enforce_once(&mount, &rules, &cfg, &rows, opts.verbose) {
+                let out = match enforce::enforce_once(
+                    &mount,
+                    &rules,
+                    &cfg,
+                    &rows,
+                    opts.verbose,
+                    still_same_process,
+                ) {
                     Ok(o) => o,
                     Err(e) => {
                         eprintln!("cgrulesd: enforce: {e}");
@@ -165,6 +172,26 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
         });
     }
     rows
+}
+
+/// Re-read `/proc/<pid>` immediately before it would be attached, to
+/// narrow the window a recycled pid has to slip past `gather()`'s
+/// once-per-pass scan: `enforce_once` may reach this row long after (up to
+/// one full pass's worth of processes later) `gather()` read it, and the
+/// original process could have exited and had its pid reused by an
+/// unrelated one in the meantime. Uid and comm both matching what was
+/// scanned is not a guarantee (a race remains between this check and the
+/// write), but it turns "reused anywhere in the last poll interval" into
+/// "reused in the time between this stat and the next write."
+fn still_same_process(row: &enforce::ProcRow) -> bool {
+    let p = std::path::Path::new("/proc").join(row.pid.to_string());
+    let Some((uid, _gid)) = status_ids(&p.join("status")) else {
+        return false;
+    };
+    if uid != row.uid {
+        return false;
+    }
+    read_first_line(&p.join("comm")).as_deref() == Some(row.comm.as_str())
 }
 
 fn read_first_line(p: &std::path::Path) -> Option<String> {
