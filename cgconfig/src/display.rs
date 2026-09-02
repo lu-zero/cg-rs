@@ -8,9 +8,15 @@
 //! escape syntax (matching real cgconfig.conf) — so `Display::fmt` returns
 //! `Err` rather than emit a quoted token that a `"` inside it would break
 //! out of, injecting unintended structure into the output. That matters
-//! because a group/template name here can come from a live cgroup
-//! directory name (`cgctl snapshot`), which an unprivileged delegatee
-//! inside their own subtree fully controls.
+//! because a group/template name, or a controller/param key here, can
+//! come from a live cgroup directory name or control-file name
+//! (`cgctl snapshot`), which an unprivileged delegatee inside their own
+//! subtree fully controls.
+//!
+//! A controller *block name* (`cpu { … }`) has no quoted form at all in
+//! this grammar (the parser's `ctl_block` only accepts a bare word) — it
+//! is refused outright when it wouldn't survive as one, since there is no
+//! way to represent it safely by quoting instead.
 
 use std::fmt;
 
@@ -60,6 +66,20 @@ fn token(s: &str) -> Result<String, fmt::Error> {
     })
 }
 
+/// A controller block name (`{c} { … }`): must already be a valid bare
+/// word — the parser's `ctl_block` has no quoted form to fall back to, so
+/// unlike [`token`] there is no way to escape this by quoting.
+fn bare_token(s: &str) -> Result<&str, fmt::Error> {
+    let ok = !s.is_empty()
+        && s.chars()
+            .all(|c| !c.is_whitespace() && !"{};=\"#".contains(c));
+    if ok {
+        Ok(s)
+    } else {
+        Err(fmt::Error)
+    }
+}
+
 fn octal(v: u32) -> String {
     format!("{v:o}")
 }
@@ -81,7 +101,7 @@ fn write_node_body(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
     // Attachment markers stay empty: a block carrying values would re-parse
     // as stored state rather than subtree_control intent.
     for c in &n.controllers {
-        writeln!(f, "\t{c} {{")?;
+        writeln!(f, "\t{} {{", bare_token(c)?)?;
         writeln!(f, "\t}}")?;
     }
     // Parameter groups by filename-prefix controller.
@@ -91,10 +111,10 @@ fn write_node_body(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
             continue;
         }
         done.push(c);
-        writeln!(f, "\t{c} {{")?;
+        writeln!(f, "\t{} {{", bare_token(c)?)?;
         for (pc, k, v) in &n.params {
             if pc == c {
-                writeln!(f, "\t\t{k} = {};", token(v)?)?;
+                writeln!(f, "\t\t{} = {};", token(k)?, token(v)?)?;
             }
         }
         writeln!(f, "\t}}")?;
@@ -189,6 +209,56 @@ template students/%u {
                 name: "x\" { } group \"users/victim".into(),
                 perm: None,
                 controllers: Vec::new(),
+                params: Vec::new(),
+            }],
+            templates: Vec::new(),
+        };
+        let mut out = String::new();
+        assert!(write!(out, "{cfg}").is_err());
+    }
+
+    #[test]
+    fn embedded_quote_in_a_param_key_refuses_to_render() {
+        // Same injection, the other half of the (controller, key, value)
+        // triple: a param *key* went to the output bare, with no
+        // token()/bare_token() check at all, until this fix. Verified
+        // (before the fix) that a key containing `"{ } group "..` renders
+        // as multiple injected group blocks and re-parses cleanly.
+        use crate::model::{ConfigFile, Node};
+        use std::fmt::Write as _;
+        let cfg = ConfigFile {
+            mounts: Vec::new(),
+            default_perm: None,
+            groups: vec![Node {
+                name: "victimless".into(),
+                perm: None,
+                controllers: Vec::new(),
+                params: vec![(
+                    "cpu".into(),
+                    "x\" } } group \"users/victim".into(),
+                    "1".into(),
+                )],
+            }],
+            templates: Vec::new(),
+        };
+        let mut out = String::new();
+        assert!(write!(out, "{cfg}").is_err());
+    }
+
+    #[test]
+    fn illegal_controller_name_refuses_to_render() {
+        // A controller block name has no quoted form in this grammar at
+        // all (ctl_block only accepts a bare word) — there is nothing
+        // token() could safely quote it into, so it must refuse outright.
+        use crate::model::{ConfigFile, Node};
+        use std::fmt::Write as _;
+        let cfg = ConfigFile {
+            mounts: Vec::new(),
+            default_perm: None,
+            groups: vec![Node {
+                name: "g".into(),
+                perm: None,
+                controllers: vec!["cpu shares".into()],
                 params: Vec::new(),
             }],
             templates: Vec::new(),
