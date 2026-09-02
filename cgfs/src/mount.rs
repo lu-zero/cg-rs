@@ -44,12 +44,14 @@ pub fn find_mount() -> io::Result<PathBuf> {
     ))
 }
 
-/// Decode `\NNN` octal escapes. The kernel escapes each *byte* independently,
-/// so a multi-byte UTF-8 mount path arrives as consecutive `\NNN` sequences
-/// (e.g. `é` as `\303\251`) — collect into a byte buffer and decode the
-/// whole thing as UTF-8 at the end, rather than mapping each escaped byte to
-/// its own `char` (which would treat every escaped byte as a lone Latin-1-ish
-/// codepoint and mangle anything non-ASCII).
+/// Decode `\NNN` octal escapes (the kernel's `seq_path` only escapes
+/// ` \t\n\\`; other bytes, non-ASCII UTF-8 included, pass through raw).
+/// Collects into a byte buffer and decodes the whole thing as UTF-8 at the
+/// end, rather than mapping each escaped byte straight to its own `char` —
+/// correct for the escaped bytes themselves either way (they're single
+/// ASCII bytes), but the byte-buffer form is also right in the general
+/// case of a `\NNN` run that happens to spell out a multi-byte sequence,
+/// instead of quietly mangling it into one Latin-1-ish codepoint per byte.
 fn unescape_mount(s: &str) -> String {
     let mut out: Vec<u8> = Vec::with_capacity(s.len());
     let mut chars = s.chars().peekable();
@@ -157,10 +159,15 @@ mod tests {
 
     #[test]
     fn unescapes_multibyte_utf8_octal_sequences() {
-        // "café" — the kernel escapes each raw byte independently, so "é"
-        // (0xC3 0xA9 in UTF-8) shows up as two consecutive \NNN escapes that
-        // must be reassembled into one codepoint, not decoded byte-by-byte.
+        // The kernel only escapes " \t\n\\", so a real "café" mount path
+        // arrives with "é" (0xC3 0xA9 in UTF-8) raw, not escaped — this
+        // pins the general property instead: *if* consecutive \NNN escapes
+        // spell out a multi-byte sequence, they must reassemble into one
+        // codepoint, not decode byte-by-byte into two Latin-1-ish ones.
         assert_eq!(unescape_mount("caf\\303\\251"), "café");
+        // The realistic case: non-ASCII passes through raw; only the
+        // space gets escaped.
+        assert_eq!(unescape_mount("caf\u{e9}\\040dir"), "café dir");
         assert_eq!(unescape_mount("plain\\040space"), "plain space");
     }
 

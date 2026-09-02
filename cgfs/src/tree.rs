@@ -109,18 +109,6 @@ pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
     Ok(())
 }
 
-#[allow(dead_code)]
-fn remove_children(dir: &std::path::Path) -> io::Result<()> {
-    // kept for backwards compat; iterative version above is preferred
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            remove_children(&entry.path())?;
-        }
-    }
-    fs::remove_dir(dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
