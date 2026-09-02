@@ -1,9 +1,16 @@
 //! Serialize [`ConfigFile`] back to cgconfig.conf syntax.
 //!
 //! Round-trip guarantee: parsing the output of `Display` yields an equal
-//! [`ConfigFile`]. Tokens that would not survive bare (whitespace,
-//! structural punctuation) are double-quoted, mirroring the parser's
-//! optional-quote support.
+//! [`ConfigFile`], *provided* every value is representable. Tokens that
+//! would not survive bare (whitespace, structural punctuation) are
+//! double-quoted, mirroring the parser's optional-quote support. A value
+//! containing a literal `"` is not representable — this format has no
+//! escape syntax (matching real cgconfig.conf) — so `Display::fmt` returns
+//! `Err` rather than emit a quoted token that a `"` inside it would break
+//! out of, injecting unintended structure into the output. That matters
+//! because a group/template name here can come from a live cgroup
+//! directory name (`cgctl snapshot`), which an unprivileged delegatee
+//! inside their own subtree fully controls.
 
 use std::fmt;
 
@@ -14,7 +21,7 @@ impl fmt::Display for ConfigFile {
         if !self.mounts.is_empty() {
             writeln!(f, "mount {{")?;
             for m in &self.mounts {
-                writeln!(f, "\t{} = {};", token(&m.controller), token(&m.path))?;
+                writeln!(f, "\t{} = {};", token(&m.controller)?, token(&m.path)?)?;
             }
             writeln!(f, "}}\n")?;
         }
@@ -29,7 +36,7 @@ impl fmt::Display for ConfigFile {
             write_node(f, g)?;
         }
         for t in &self.templates {
-            writeln!(f, "template {} {{", token(&t.name))?;
+            writeln!(f, "template {} {{", token(&t.name)?)?;
             write_node_body(f, t)?;
             writeln!(f)?;
         }
@@ -37,16 +44,20 @@ impl fmt::Display for ConfigFile {
     }
 }
 
-/// Quote a token when bare form would be ambiguous to the parser.
-fn token(s: &str) -> String {
+/// Quote a token when bare form would be ambiguous to the parser. `Err` for
+/// a value containing a literal `"` — see the module doc comment.
+fn token(s: &str) -> Result<String, fmt::Error> {
+    if s.contains('"') {
+        return Err(fmt::Error);
+    }
     let bare_ok = !s.is_empty()
         && s.chars()
-            .all(|c| !c.is_whitespace() && !"{};=\"#".contains(c));
-    if bare_ok {
+            .all(|c| !c.is_whitespace() && !"{};=#".contains(c));
+    Ok(if bare_ok {
         s.to_owned()
     } else {
         format!("\"{s}\"")
-    }
+    })
 }
 
 fn octal(v: u32) -> String {
@@ -54,7 +65,7 @@ fn octal(v: u32) -> String {
 }
 
 fn write_node(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
-    writeln!(f, "group {} {{", token(&n.name))?;
+    writeln!(f, "group {} {{", token(&n.name)?)?;
     write_node_body(f, n)?;
     writeln!(f)?;
     Ok(())
@@ -83,7 +94,7 @@ fn write_node_body(f: &mut fmt::Formatter<'_>, n: &Node) -> fmt::Result {
         writeln!(f, "\t{c} {{")?;
         for (pc, k, v) in &n.params {
             if pc == c {
-                writeln!(f, "\t\t{k} = {};", token(v))?;
+                writeln!(f, "\t\t{k} = {};", token(v)?)?;
             }
         }
         writeln!(f, "\t}}")?;
@@ -101,10 +112,10 @@ fn write_perm(f: &mut fmt::Formatter<'_>, p: &Perm) -> fmt::Result {
 fn write_set_block(f: &mut fmt::Formatter<'_>, kind: &str, s: &PermSet) -> fmt::Result {
     writeln!(f, "\t\t{kind} {{")?;
     if let Some(uid) = &s.uid {
-        writeln!(f, "\t\t\tuid = {};", token(uid))?;
+        writeln!(f, "\t\t\tuid = {};", token(uid)?)?;
     }
     if let Some(gid) = &s.gid {
-        writeln!(f, "\t\t\tgid = {};", token(gid))?;
+        writeln!(f, "\t\t\tgid = {};", token(gid)?)?;
     }
     if let Some(d) = s.dperm {
         writeln!(f, "\t\t\tdperm = {};", octal(d))?;
@@ -158,6 +169,32 @@ template students/%u {
 }
 "#;
         round_trip(text);
+    }
+
+    #[test]
+    fn embedded_quote_in_a_name_refuses_to_render() {
+        // Group/template names can come from a live cgroup directory name
+        // (cgctl snapshot), which an unprivileged delegatee inside their
+        // own subtree fully controls — including a literal `"`. This
+        // format has no escape syntax, so emitting it unescaped would let
+        // that `"` close the quoted token early and inject arbitrary
+        // config structure into everything after it. Display must refuse
+        // rather than emit that.
+        use crate::model::{ConfigFile, Node};
+        use std::fmt::Write as _;
+        let cfg = ConfigFile {
+            mounts: Vec::new(),
+            default_perm: None,
+            groups: vec![Node {
+                name: "x\" { } group \"users/victim".into(),
+                perm: None,
+                controllers: Vec::new(),
+                params: Vec::new(),
+            }],
+            templates: Vec::new(),
+        };
+        let mut out = String::new();
+        assert!(write!(out, "{cfg}").is_err());
     }
 
     #[test]
