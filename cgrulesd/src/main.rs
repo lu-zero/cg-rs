@@ -5,6 +5,7 @@
 mod enforce;
 mod nss;
 
+use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
@@ -86,13 +87,29 @@ fn load(opts: &Opts) -> io::Result<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> 
 fn run(opts: &Opts) -> io::Result<()> {
     // Destinations enforce_once created via a template match, tracked
     // across the daemon's whole lifetime so reap_idle_templates can
-    // notice when one goes idle. A --once run never reaps (see that
-    // function's doc comment), so there's no need to persist this
-    // anywhere beyond the current process either way.
-    let mut tracked_templates = std::collections::HashSet::new();
+    // notice when one goes idle. A --once run never reaps in practice
+    // (see that function's doc comment for why), so there's no need to
+    // persist this anywhere beyond the current process either way.
+    let mut tracked_templates = HashSet::new();
+    // Cleared whenever the loaded (rules, cgconfig) changes, so a
+    // destination that used to be a template match but is now an
+    // admin-declared `group` (or vice versa) doesn't keep the stale
+    // classification from before the reload — enforce_once re-derives
+    // and re-inserts the correct entries on the very next pass via the
+    // already-placed path, so clearing here costs nothing but a pass of
+    // rediscovery.
+    let mut last_loaded: Option<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> = None;
     loop {
         match load(opts) {
             Ok((rules, cfg)) => {
+                let changed = match &last_loaded {
+                    Some((r, c)) => *r != rules || *c != cfg,
+                    None => true,
+                };
+                if changed {
+                    tracked_templates.clear();
+                    last_loaded = Some((rules.clone(), cfg.clone()));
+                }
                 let mount = match cgfs::find_mount() {
                     Ok(m) => m,
                     Err(e) => {
@@ -125,7 +142,7 @@ fn run(opts: &Opts) -> io::Result<()> {
                     }
                 };
                 if !opts.once {
-                    enforce::reap_idle_templates(&mut tracked_templates);
+                    enforce::reap_idle_templates(&mut tracked_templates, opts.verbose);
                 }
                 if opts.verbose {
                     eprintln!(

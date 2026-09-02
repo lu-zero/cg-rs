@@ -60,6 +60,12 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   sibling cgroup just by naming it). A literal, placeholder-free
   destination shared by several users needs a real group/template
   entry; no single uid owns a genuinely shared `cgroup.procs`.
+  Destinations created via a *template* match (not a `group`, which
+  persists by design) are reaped once idle — going further than real
+  cgrulesengd/cgred, whose man page documents on-demand creation but
+  never cleanup, so a template destination there grows without bound
+  for the daemon's whole lifetime. Reaping only runs in continuous
+  polling mode; `--once` (e.g. run from cron) never reaps.
 
 Shared metadata lives in `[workspace.package]`; shared deps in
 `[workspace.dependencies]`. Member manifests use `workspace = true`

@@ -3,7 +3,7 @@
 //! Pure-ish by design — process rows are supplied by the caller so the
 //! matching/moving logic is testable without a live `/proc`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{self};
 use std::os::unix::fs::MetadataExt;
@@ -60,7 +60,7 @@ pub fn enforce_once(
     procs: &[ProcRow],
     verbose: bool,
     revalidate: impl Fn(&ProcRow) -> bool,
-    tracked_templates: &mut std::collections::HashSet<PathBuf>,
+    tracked_templates: &mut HashSet<PathBuf>,
 ) -> io::Result<Outcome> {
     let mut out = Outcome::default();
     let mut missing: Vec<String> = Vec::new();
@@ -90,11 +90,6 @@ pub fn enforce_once(
             );
             continue;
         }
-        if norm(&row.cgroup) == dest {
-            out.already_placed += 1;
-            continue;
-        }
-
         let Some((spec, is_template)) =
             leaf_spec(cfg, &dest, &rule.destination.0, &identity, mount)
         else {
@@ -104,6 +99,34 @@ pub fn enforce_once(
             }
             continue;
         };
+        // Track before checking already_placed or calling apply, not
+        // only after a successful apply:
+        //
+        // - already_placed short-circuits every poll after the first for
+        //   a long-lived process. Tracking only on the move that created
+        //   the destination means a process placed by a *previous* daemon
+        //   incarnation (restart, upgrade, config reload) never
+        //   re-registers its destination — tracked_templates is
+        //   in-memory only, so that destination becomes permanently
+        //   invisible to the reaper.
+        // - cgfs::apply creates the directory via mkdir before anything
+        //   that can fail afterwards (chown/chmod/attach), so a failure
+        //   partway through — the common case: gather()'s scanned pid
+        //   has already exited by the time apply() gets to it — must
+        //   not leave an untracked, permanently unreaped directory on
+        //   disk. That is exactly the unbounded growth this tracking
+        //   exists to prevent.
+        //
+        // reap_idle_templates is safe to call on a path that was never
+        // actually created, or that something else already removed: its
+        // rmdir attempt fails with NotFound and it untracks itself.
+        if is_template {
+            tracked_templates.insert(spec.path.clone());
+        }
+        if norm(&row.cgroup) == dest {
+            out.already_placed += 1;
+            continue;
+        }
         if !revalidate(row) {
             if verbose {
                 eprintln!(
@@ -125,9 +148,6 @@ pub fn enforce_once(
             }
             eprintln!("cgrulesd: apply pid {} -> /{}: {e}", row.pid, dest);
             continue;
-        }
-        if is_template {
-            tracked_templates.insert(spec.path.clone());
         }
         out.moved += 1;
         if verbose {
@@ -153,14 +173,25 @@ pub fn enforce_once(
 /// for sustained emptiness across several passes.
 ///
 /// `cgfs::delete_leaf` is a plain `rmdir`, which the kernel already
-/// refuses on a non-empty directory (live tasks or child cgroups) — so a
-/// path that gains a new member between this function's own empty-check
-/// and the delete simply fails to delete and stays tracked for the next
-/// call; nothing gets destroyed out from under a live occupant. Call
-/// once per poll, after `enforce_once`, only when polling continuously —
-/// a `--once` run's `tracked_templates` starts and ends empty in the
-/// same process, so there is never anything meaningful to reap there.
-pub fn reap_idle_templates(tracked_templates: &mut std::collections::HashSet<PathBuf>) {
+/// refuses (`EBUSY`) on a populated cgroup or one with online children —
+/// so a path that gains a new member between this function's own
+/// empty-check and the delete simply fails to delete and stays tracked
+/// for the next call; nothing gets destroyed out from under a live
+/// occupant. A path that no longer exists at all — already removed by
+/// this function, by `cgctl delete`, by an admin, or never actually
+/// created because `cgfs::apply` failed partway through — is untracked
+/// rather than retried forever: there is nothing left to reap, and an
+/// entry that can never succeed and never gets dropped would leak
+/// memory in exactly the way this feature exists to avoid for the
+/// cgroups themselves.
+///
+/// Call once per poll, after `enforce_once`, only when polling
+/// continuously: a `--once` run's `tracked_templates` starts empty and
+/// only ever gains entries that were *just* attached to, so none of
+/// them will read as empty in that same pass — a `--once` deployment
+/// (e.g. run from cron) never reaps anything, ever, regardless of
+/// whether this is called there.
+pub fn reap_idle_templates(tracked_templates: &mut HashSet<PathBuf>, verbose: bool) {
     tracked_templates.retain(|path| {
         // A `cgroup.procs` that can't be read (missing entirely, say) is
         // treated the same as empty rather than as "still occupied": the
@@ -173,9 +204,25 @@ pub fn reap_idle_templates(tracked_templates: &mut std::collections::HashSet<Pat
         if !empty {
             return true; // still occupied: keep tracking
         }
-        // Ok(()): removed, stop tracking. Err: still has children, or a
-        // race with a new occupant — keep tracking, retry next call.
-        cgfs::delete_leaf(path).is_err()
+        match cgfs::delete_leaf(path) {
+            Ok(()) => {
+                if verbose {
+                    eprintln!("cgrulesd: reaped idle destination {}", path.display());
+                }
+                false // removed: stop tracking
+            }
+            // Already gone (we reaped it before, or something else
+            // did, or it was never created): nothing left to track.
+            Err(e) if e.kind() == io::ErrorKind::NotFound => false,
+            // cgroup2's rmdir returns EBUSY for a populated cgroup or
+            // one with online children, not ENOTEMPTY — this is the
+            // expected "still in use" outcome, not worth logging.
+            Err(e) if e.raw_os_error() == Some(libc::EBUSY) => true,
+            Err(e) => {
+                eprintln!("cgrulesd: reap {}: {e}", path.display());
+                true // unexpected error: keep tracking, retry next call
+            }
+        }
     });
 }
 
@@ -200,6 +247,18 @@ fn dest_path(mount: &Path, dest: &str) -> PathBuf {
 /// fallback (no config entry at all) only ever matches something that
 /// already existed before cgrulesd touched it, so there's nothing of
 /// cgrulesd's own to reap there either.
+///
+/// Unlike the no-config fallback below (which checks `cgroup.procs`
+/// ownership before accepting an existing directory), a *template* is
+/// trusted as written: nothing here re-verifies that its expansion
+/// doesn't happen to name an existing, unrelated cgroup. A destination
+/// like a bare `template %p { … }` would give a process with a
+/// well-chosen `comm` the same "join an existing sibling cgroup"
+/// leverage the fallback's ownership check exists to close — but the
+/// admin had to write that shallow, placeholder-only template
+/// deliberately (a scoped one like `template apps/%p { … }` isn't
+/// reachable this way), so it's treated as admin intent rather than a
+/// gap to close here too.
 fn leaf_spec(
     cfg: &ConfigFile,
     dest: &str,
@@ -596,7 +655,7 @@ mod tests {
             comm: "zsh".into(),
             cgroup: "/".into(),
         }];
-        let mut tracked = std::collections::HashSet::new();
+        let mut tracked = HashSet::new();
         let out = enforce_once(
             tmp.path(),
             &rules,
@@ -622,10 +681,121 @@ mod tests {
         // content — remove it too, to simulate what the kernel actually
         // allows rather than what bare POSIX rmdir would.
         fs::remove_file(dir.join("cgroup.procs")).unwrap();
-        reap_idle_templates(&mut tracked);
+        reap_idle_templates(&mut tracked, false);
 
         assert!(tracked.is_empty(), "reaped path must stop being tracked");
         assert!(!dir.exists(), "idle template destination must be removed");
+    }
+
+    /// The load-bearing safety property, previously asserted nowhere:
+    /// a tracked path that's still occupied must never be removed.
+    #[test]
+    fn occupied_tracked_path_is_not_reaped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("occupied");
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("cgroup.procs"), "1234\n").unwrap();
+
+        let mut tracked = HashSet::new();
+        tracked.insert(dir.clone());
+        reap_idle_templates(&mut tracked, false);
+
+        assert!(tracked.contains(&dir), "an occupied path must stay tracked");
+        assert!(dir.exists(), "an occupied path must not be removed");
+    }
+
+    #[test]
+    fn template_destination_is_tracked_even_when_apply_fails_after_mkdir() {
+        // cgfs::apply creates the directory via mkdir before anything
+        // that can fail afterwards — here, chown to uid 0, which an
+        // unprivileged test process cannot do. This is the common real
+        // case too: gather()'s scanned pid has often already exited by
+        // the time apply() gets to attach(), which fails the same way
+        // (after mkdir). A destination must be tracked regardless of
+        // whether apply ultimately succeeds, or the directory leaks
+        // untracked forever — exactly the unbounded growth this
+        // feature exists to prevent.
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, uname) = me();
+        let cfg_text =
+            "template students/%u {\n perm { admin { uid = 0; gid = 0; dperm = 750; } }\n}\n";
+        let cfg = parse_cgconfig(cfg_text).unwrap();
+        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+
+        let rows = vec![ProcRow {
+            pid: 782,
+            user: uname.clone(),
+            uid,
+            gid,
+            groups: vec![],
+            comm: "zsh".into(),
+            cgroup: "/".into(),
+        }];
+        let mut tracked = HashSet::new();
+        let out = enforce_once(
+            tmp.path(),
+            &rules,
+            &cfg,
+            &rows,
+            false,
+            |_| true,
+            &mut tracked,
+        )
+        .unwrap();
+        assert_eq!(
+            out.moved, 0,
+            "chown to uid 0 must fail unprivileged: {out:?}"
+        );
+
+        let dir = tmp.path().join(format!("students/{uname}"));
+        assert!(dir.exists(), "mkdir must have run before the chown failure");
+        assert!(
+            tracked.contains(&dir),
+            "must be tracked despite apply failing after mkdir"
+        );
+    }
+
+    #[test]
+    fn already_placed_template_destination_is_still_tracked() {
+        // A process already correctly placed (from a previous poll, or
+        // a previous daemon restart — tracked_templates is in-memory
+        // only) must still register its destination, or a restart
+        // permanently orphans every existing template destination from
+        // the reaper's point of view.
+        let tmp = tempfile::tempdir().unwrap();
+        let (uid, gid, uname) = me();
+        let cfg_text = format!(
+            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {uid}; }} admin {{ dperm = 750; }} }}\n}}\n"
+        );
+        let cfg = parse_cgconfig(&cfg_text).unwrap();
+        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+
+        let dest_rel = format!("students/{uname}");
+        let rows = vec![ProcRow {
+            pid: 783,
+            user: uname.clone(),
+            uid,
+            gid,
+            groups: vec![],
+            comm: "zsh".into(),
+            cgroup: dest_rel.clone(), // already there
+        }];
+        let mut tracked = HashSet::new();
+        let out = enforce_once(
+            tmp.path(),
+            &rules,
+            &cfg,
+            &rows,
+            false,
+            |_| true,
+            &mut tracked,
+        )
+        .unwrap();
+        assert_eq!(out.already_placed, 1, "{out:?}");
+        assert!(
+            tracked.contains(&tmp.path().join(dest_rel)),
+            "already-placed template destination must still be tracked"
+        );
     }
 
     #[test]
@@ -647,7 +817,7 @@ mod tests {
             comm: "zsh".into(),
             cgroup: "/".into(),
         }];
-        let mut tracked = std::collections::HashSet::new();
+        let mut tracked = HashSet::new();
         let out = enforce_once(
             tmp.path(),
             &rules,
@@ -666,7 +836,7 @@ mod tests {
 
         let dir = tmp.path().join("pool");
         fs::write(dir.join("cgroup.procs"), "").unwrap();
-        reap_idle_templates(&mut tracked); // nothing tracked: no-op
+        reap_idle_templates(&mut tracked, false); // nothing tracked: no-op
         assert!(
             dir.exists(),
             "a group destination must persist regardless of occupancy"
