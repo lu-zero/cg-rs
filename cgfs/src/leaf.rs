@@ -180,15 +180,7 @@ pub fn apply(spec: &LeafSpec, attach_pid: Option<u32>) -> io::Result<()> {
 
     for dir in created.iter().rev() {
         if let Some(mode) = spec.dperm {
-            // Ancestors stay root-owned (above), but a permissive dperm
-            // (e.g. 0775, common for a delegated leaf) would still hand
-            // every delegatee group/other *write* on a directory shared
-            // with sibling leaves — the same structural control the
-            // ownership choice above exists to avoid, just via mode
-            // instead of owner. Keep dperm's read/execute (so a
-            // delegatee can still traverse through to their own leaf)
-            // but strip group/other write unconditionally on ancestors.
-            set_mode(dir, mode & !0o022)?;
+            set_mode(dir, ancestor_dperm(mode))?;
         }
     }
     set_owner(&spec.path, spec.uid, spec.gid)?;
@@ -244,6 +236,16 @@ pub fn attach(path: &Path, pid: u32) -> io::Result<()> {
 pub fn set_owner(path: &Path, uid: Option<u32>, gid: Option<u32>) -> io::Result<()> {
     refuse_symlink(path)?;
     chown(path, uid.map(Uid::from_raw), gid.map(Gid::from_raw)).map_err(io::Error::from)
+}
+
+/// Mode for a newly created ancestor of the leaf.
+///
+/// Ancestors stay root-owned, so the leaf's `task` owner is `other` on
+/// them. Strip group/other write so a delegated user cannot mkdir/rmdir
+/// siblings, but force execute so they can still walk to their own leaf
+/// even when `dperm` is `0750` (no `o+x` as written).
+fn ancestor_dperm(dperm: u32) -> u32 {
+    (dperm & !0o022) | 0o011
 }
 
 /// chmod an existing path (octal mode bits). Refuses to follow a symlink.
@@ -311,7 +313,7 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         for rel in ["users", "users/lu_zero"] {
             let m = fs::metadata(root.join(rel)).unwrap();
-            assert_eq!(m.permissions().mode() & 0o777, 0o750, "{rel}");
+            assert_eq!(m.permissions().mode() & 0o777, 0o751, "{rel}");
         }
         let leaf_meta = fs::metadata(root.join(leaf_rel)).unwrap();
         assert_eq!(leaf_meta.uid(), uid);
@@ -500,5 +502,43 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(leaf_mode, 0o777);
+    }
+
+    #[test]
+    fn ancestor_dperm_0750_is_still_traversable() {
+        // The students template uses `dperm = 750`; without forcing o+x
+        // the task owner cannot walk a root-owned `students/` parent.
+        assert_eq!(ancestor_dperm(0o750), 0o751);
+        assert_eq!(ancestor_dperm(0o777), 0o755);
+        assert_eq!(ancestor_dperm(0o700), 0o711);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("cg");
+        let uid = rustix::process::geteuid().as_raw();
+        let gid = rustix::process::getegid().as_raw();
+        let spec = LeafSpec {
+            path: root.join("students/alice"),
+            uid: Some(uid),
+            gid: Some(gid),
+            dperm: Some(0o750),
+            fperm: None,
+            task_fperm: None,
+            task_uid: None,
+            task_gid: None,
+            subtree_control: vec![],
+        };
+        apply(&spec, None).unwrap();
+        let parent = fs::metadata(root.join("students"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(parent, 0o751);
+        let leaf = fs::metadata(root.join("students/alice"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(leaf, 0o750);
     }
 }

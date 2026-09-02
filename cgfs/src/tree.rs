@@ -82,12 +82,6 @@ pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
                     "refusing to remove the cgroup mount point",
                 ));
             }
-            if mount == std::path::Path::new(crate::mount::DEFAULT_MOUNT) && canon == mount {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "refusing to remove the cgroup mount point",
-                ));
-            }
         }
         Err(_) => {
             // If we cannot determine the mount, refuse to delete the default
