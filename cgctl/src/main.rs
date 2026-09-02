@@ -6,7 +6,7 @@ mod nss;
 mod snapshot;
 
 use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
 use cgfs::LeafSpec;
@@ -59,16 +59,32 @@ fn mount() -> io::Result<PathBuf> {
 }
 
 /// Pop the next argument as a path under the cgroup2 mount.
+///
+/// Only `..` and a Windows-style prefix are rejected here — unlike
+/// `is_safe_relative_path`, an explicit `/` (the mount root itself) stays
+/// legal: `cgctl get /` inspecting the root cgroup is a normal, explicit
+/// admin action, not a destination a rule/template placeholder could ever
+/// silently resolve to. All of `get`/`set`/`classify`/`delete`/`exec` are
+/// root-typed CLI arguments (an admin's own typo, not another user's
+/// input), but `config`'s cgconfig.conf-driven paths already get the
+/// stricter check, so this closes the same escape here for consistency.
 fn take_path(rest: &mut Vec<String>) -> io::Result<PathBuf> {
     let raw = match rest.first() {
         Some(r) => r.clone(),
         None => usage(),
     };
     rest.remove(0);
-    Ok(cgfs::join(
-        &mount()?,
-        Path::new(raw.trim_start_matches('/')),
-    ))
+    let rel = raw.trim_start_matches('/');
+    if let Some(bad) = Path::new(rel)
+        .components()
+        .find(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
+    {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("path {raw:?} contains illegal component {bad:?}"),
+        ));
+    }
+    Ok(cgfs::join(&mount()?, Path::new(rel)))
 }
 
 // ------------------------------------------------------------------ config
@@ -231,14 +247,18 @@ fn bad_pid(s: &str) -> io::Error {
 fn exec(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
     let procs = path.join("cgroup.procs");
+    // Built here, in the parent, and moved into the closure: CString::new
+    // allocates, which is not async-signal-safe, so it must not run
+    // between fork and exec (the comment below already claimed this
+    // property; the code didn't actually have it).
+    let cstr = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
+        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
     use std::os::unix::process::CommandExt;
     let err = unsafe {
         std::process::Command::new(rest.first().unwrap_or_else(|| usage()))
             .args(&rest[1..])
             .pre_exec(move || {
                 // Only async-signal-safe operations between fork and exec.
-                let cstr = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
-                    .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
                 let fd = libc::open(cstr.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
                 if fd < 0 {
                     return Err(io::Error::last_os_error());
