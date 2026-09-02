@@ -52,9 +52,21 @@ pub fn delete_leaf(path: &std::path::Path) -> io::Result<()> {
 
 /// Remove `path` and every cgroup below it, children first.
 ///
-/// Refuses to remove the cgroup2 mount point itself and guards against
-/// symlink and non-cgroup2 cases.
+/// Refuses to remove the cgroup2 mount point itself, and refuses `path`
+/// itself if it is a symlink (`canonicalize` below would otherwise follow
+/// it transparently). Each child found while walking is filtered by
+/// `DirEntry::file_type`, which does not follow symlinks either, so a
+/// symlink appearing *inside* the tree is already excluded — only the
+/// top-level `path` argument needed an explicit check. This does not
+/// detect a symlinked *ancestor* of `path`, nor verify `path` itself is on
+/// a cgroup2 filesystem.
 pub fn delete_tree(path: &std::path::Path) -> io::Result<()> {
+    if fs::symlink_metadata(path)?.file_type().is_symlink() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "refusing to remove through a symlink",
+        ));
+    }
     let canon = path.canonicalize()?;
     if canon == std::path::Path::new("/") {
         return Err(io::Error::new(
@@ -159,6 +171,18 @@ mod tests {
 
         assert!(delete_tree(&tmp.path().join("users")).is_err());
         assert!(tmp.path().join("users").exists());
+    }
+
+    #[test]
+    fn refuses_a_symlinked_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let victim = mk(tmp.path(), "victim");
+        let link = tmp.path().join("link");
+        std::os::unix::fs::symlink(&victim, &link).unwrap();
+
+        let err = delete_tree(&link).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
+        assert!(victim.exists(), "the real directory must be untouched");
     }
 
     #[test]
