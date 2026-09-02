@@ -84,6 +84,12 @@ fn load(opts: &Opts) -> io::Result<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> 
 }
 
 fn run(opts: &Opts) -> io::Result<()> {
+    // Destinations enforce_once created via a template match, tracked
+    // across the daemon's whole lifetime so reap_idle_templates can
+    // notice when one goes idle. A --once run never reaps (see that
+    // function's doc comment), so there's no need to persist this
+    // anywhere beyond the current process either way.
+    let mut tracked_templates = std::collections::HashSet::new();
     loop {
         match load(opts) {
             Ok((rules, cfg)) => {
@@ -106,6 +112,7 @@ fn run(opts: &Opts) -> io::Result<()> {
                     &rows,
                     opts.verbose,
                     still_same_process,
+                    &mut tracked_templates,
                 ) {
                     Ok(o) => o,
                     Err(e) => {
@@ -117,6 +124,9 @@ fn run(opts: &Opts) -> io::Result<()> {
                         continue;
                     }
                 };
+                if !opts.once {
+                    enforce::reap_idle_templates(&mut tracked_templates);
+                }
                 if opts.verbose {
                     eprintln!(
                         "cgrulesd: moved {} placed {} ruleless {} nodest {}",
