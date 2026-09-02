@@ -88,6 +88,12 @@ fn config(mut rest: Vec<String>) -> io::Result<()> {
         if node.name == "." {
             continue; // the root cgroup exists by definition
         }
+        if !cgconfig::model::is_safe_relative_path(&node.name) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("group name {:?} has illegal path components", node.name),
+            ));
+        }
         let perm = cfg.effective_perm(node);
         let spec = LeafSpec {
             path: cgfs::join(&mount, Path::new(&node.name)),
