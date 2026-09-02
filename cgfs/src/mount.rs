@@ -44,8 +44,14 @@ pub fn find_mount() -> io::Result<PathBuf> {
     ))
 }
 
+/// Decode `\NNN` octal escapes. The kernel escapes each *byte* independently,
+/// so a multi-byte UTF-8 mount path arrives as consecutive `\NNN` sequences
+/// (e.g. `é` as `\303\251`) — collect into a byte buffer and decode the
+/// whole thing as UTF-8 at the end, rather than mapping each escaped byte to
+/// its own `char` (which would treat every escaped byte as a lone Latin-1-ish
+/// codepoint and mangle anything non-ASCII).
 fn unescape_mount(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out: Vec<u8> = Vec::with_capacity(s.len());
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\' {
@@ -62,17 +68,18 @@ fn unescape_mount(s: &str) -> String {
             }
             if oct.len() == 3 {
                 if let Ok(v) = u8::from_str_radix(&oct, 8) {
-                    out.push(v as char);
+                    out.push(v);
                     continue;
                 }
             }
-            out.push('\\');
-            out.push_str(&oct);
+            out.push(b'\\');
+            out.extend_from_slice(oct.as_bytes());
         } else {
-            out.push(c);
+            let mut buf = [0u8; 4];
+            out.extend_from_slice(c.encode_utf8(&mut buf).as_bytes());
         }
     }
-    out
+    String::from_utf8_lossy(&out).into_owned()
 }
 
 /// One `mountinfo` line: `id parent dev root mountpoint opts - fstype …`.
@@ -146,6 +153,15 @@ mod tests {
             PathBuf::from("/sys/fs/cgroup")
         );
         assert!(parse_mountinfo_line("1 2 3:4 / /proc rw - proc proc rw").is_none());
+    }
+
+    #[test]
+    fn unescapes_multibyte_utf8_octal_sequences() {
+        // "café" — the kernel escapes each raw byte independently, so "é"
+        // (0xC3 0xA9 in UTF-8) shows up as two consecutive \NNN escapes that
+        // must be reassembled into one codepoint, not decoded byte-by-byte.
+        assert_eq!(unescape_mount("caf\\303\\251"), "café");
+        assert_eq!(unescape_mount("plain\\040space"), "plain space");
     }
 
     #[test]
