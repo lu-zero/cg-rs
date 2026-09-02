@@ -1,8 +1,9 @@
 //! `cgctl snapshot`: rebuild a cgconfig.conf view of the live tree.
 //!
-//! Faithful to layout, ownership, modes and enabled controllers. Parameter
-//! dumping is deliberately out of scope for now (cgsnapshot's blacklist
-//! machinery is its own project); emitted controller blocks are empty.
+//! Faithful to layout, ownership, modes, enabled controllers, and
+//! single-line writable knobs. Volatile/read-only families (`.stat`,
+//! `.current`, `.pressure`, …) are skipped so a round-trip apply would
+//! not write gauges or counters.
 
 use std::fs;
 use std::io;
