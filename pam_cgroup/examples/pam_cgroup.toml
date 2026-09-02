@@ -1,5 +1,6 @@
 # Login layout jobacct can mkdir a sibling leaf under.
-# PAM: session optional pam_cgroup_rs.so config=/etc/cgroup/pam_cgroup.toml
+# PAM: session optional pam_cgroup.so config=/etc/cgroup/pam_cgroup.toml
+# Optional: cgrules=/etc/cgrules.conf cgrules.d=/etc/cgrules.d cgconfig=/etc/cgconfig.conf
 #
 # {user} {uid} {gid} {group} expand from the PAM user (not from %u in a
 # cgconfig perm parser).

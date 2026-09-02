@@ -6,6 +6,8 @@
 #[cfg(not(target_os = "linux"))]
 compile_error!("pam_cgroup places logins in Linux cgroup v2 leaves");
 
+pub mod args;
+pub mod classify;
 pub mod config;
 pub mod place;
 pub mod user;
@@ -16,6 +18,7 @@ pub mod user;
 #[cfg(feature = "capi")]
 mod pam_mod;
 
+pub use args::PamArgs;
 pub use config::{Config, Place, DEFAULT_CONFIG};
 pub use place::{apply, Step};
 pub use user::User;

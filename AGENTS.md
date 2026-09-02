@@ -44,8 +44,11 @@ resolution must stay compatible — the 1.85 matrix leg enforces it.
   dev-deps add `fancy-no-backtrace` for rendered-output tests).
 - `cgfs/` — cgroupfs v2 write side: apply/delete/walk/raw control files.
   rustix-backed, Linux-gated (statfs-verified mounts).
-- `pam_cgroup/` — PAM module (cdylib via cargo-c, `panic=abort` in capi
-  metadata) + `pam-cgroup` CLI. Consumes `cgfs`; TOML config is its own.
+- `pam_cgroup/` — PAM module (cdylib via cargo-c) + `pam-cgroup` CLI.
+  Consumes `cgfs`; TOML config is its own (`config=`). Optional `cgrules=`
+  / `cgrules.d=` / `cgconfig=` classify the login pid after `[[place]]`.
+  `pam_sm_open_session` catches panics at the ABI boundary
+  (`catch_unwind` → `PAM_SESSION_ERR`); default `panic=unwind`.
   The capi section uses `plugin = true` (`pam_cgroup.so` in
   `$libdir/security`, no .a/.pc); needs **cargo-c ≥ 0.10.25**
   (earlier versions ignore the key and install the legacy layout).

@@ -28,6 +28,8 @@ libc = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 cgfs = { workspace = true }
+cgconfig = { workspace = true }
+cg_nss = { workspace = true }
 
 # cargo cinstall --prefix=/usr --libdir=/usr/lib64
 #   $libdir/security/pam_cgroup.so  (install_subdir = plugin dir)
@@ -43,4 +45,6 @@ generation = false
 name = "pam_cgroup"
 install_subdir = "security"
 plugin = true
-rustflags = "-Cpanic=abort"
+# panic=unwind so `catch_unwind` at the PAM ABI boundary can turn a
+# panic into PAM_SESSION_ERR instead of aborting sshd/login's session
+# child. Unwind never crosses into C: pam_sm_open_session catches it.

@@ -2,9 +2,12 @@
 
 use std::ffi::{c_char, c_int, c_void, CStr, CString};
 use std::fs;
+use std::io;
 use std::ptr;
 
-use crate::config::{Config, DEFAULT_CONFIG};
+use crate::args::PamArgs;
+use crate::classify;
+use crate::config::Config;
 use crate::place;
 use crate::user::User;
 
@@ -48,50 +51,57 @@ fn pam_user(pamh: *const c_void) -> Result<String, c_int> {
         .map_err(|_| PAM_SESSION_ERR)
 }
 
-fn config_path(argc: c_int, argv: *const *const c_char) -> String {
+fn argv_tokens(argc: c_int, argv: *const *const c_char) -> Vec<String> {
     if argv.is_null() {
-        return DEFAULT_CONFIG.to_string();
+        return Vec::new();
     }
+    let mut out = Vec::new();
     for i in 0..argc {
         let p = unsafe { *argv.offset(i as isize) };
         if p.is_null() {
             continue;
         }
-        let arg = unsafe { CStr::from_ptr(p) };
-        if let Ok(s) = arg.to_str() {
-            if let Some(path) = s.strip_prefix("config=") {
-                return path.to_string();
-            }
+        if let Ok(s) = unsafe { CStr::from_ptr(p) }.to_str() {
+            out.push(s.to_string());
         }
     }
-    DEFAULT_CONFIG.to_string()
+    out
 }
 
 fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) -> c_int {
-    let path = config_path(argc, argv);
-    let cfg = match Config::load(&path) {
-        Ok(c) => c,
+    let tokens = argv_tokens(argc, argv);
+    let refs: Vec<&str> = tokens.iter().map(String::as_str).collect();
+    let (args, unknown) = PamArgs::parse(refs);
+    for u in &unknown {
+        log_msg(LOG_ERR, &format!("unknown option: {u}"));
+    }
+
+    let toml = match Config::load(&args.config) {
+        Ok(c) => Some(c),
+        Err(e) if e.kind() == io::ErrorKind::NotFound && args.cgrules.is_some() => None,
         Err(e) => {
-            log_msg(LOG_ERR, &format!("load {path}: {e}"));
-            return if cfg_fail_closed(&path) {
+            log_msg(LOG_ERR, &format!("load {}: {e}", args.config));
+            return if cfg_fail_closed(&args.config) {
                 PAM_SESSION_ERR
             } else {
                 PAM_SUCCESS
             };
         }
     };
+    let fail_closed = toml.as_ref().map(|c| c.fail_closed).unwrap_or(false);
+
     let name = match pam_user(pamh) {
         Ok(n) => n,
         Err(e) => {
             log_msg(LOG_ERR, "no PAM_USER");
-            return if cfg.fail_closed { e } else { PAM_SUCCESS };
+            return if fail_closed { e } else { PAM_SUCCESS };
         }
     };
     let user = match User::from_name(&name) {
         Ok(u) => u,
         Err(e) => {
             log_msg(LOG_ERR, &format!("user {name}: {e}"));
-            return if cfg.fail_closed {
+            return if fail_closed {
                 PAM_SESSION_ERR
             } else {
                 PAM_SUCCESS
@@ -99,32 +109,72 @@ fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) ->
         }
     };
     let pid = std::process::id();
-    match place::apply(&cfg, &user, pid) {
-        Ok(steps) => {
-            log_msg(
-                LOG_INFO,
-                &format!(
-                    "placed uid={} pid={} at {}",
-                    user.uid,
-                    pid,
-                    steps
-                        .iter()
-                        .find(|s| s.attach)
-                        .map(|s| s.path.display().to_string())
-                        .unwrap_or_default()
-                ),
-            );
-            PAM_SUCCESS
-        }
-        Err(e) => {
-            log_msg(LOG_ERR, &format!("apply: {e}"));
-            if cfg.fail_closed {
-                PAM_SESSION_ERR
-            } else {
-                PAM_SUCCESS
+
+    if let Some(cfg) = &toml {
+        match place::apply(cfg, &user, pid) {
+            Ok(steps) => {
+                log_msg(
+                    LOG_INFO,
+                    &format!(
+                        "placed uid={} pid={} at {}",
+                        user.uid,
+                        pid,
+                        steps
+                            .iter()
+                            .find(|s| s.attach)
+                            .map(|s| s.path.display().to_string())
+                            .unwrap_or_default()
+                    ),
+                );
+            }
+            Err(e) => {
+                log_msg(LOG_ERR, &format!("apply: {e}"));
+                if fail_closed {
+                    return PAM_SESSION_ERR;
+                }
             }
         }
     }
+
+    if let Some(cgrules) = &args.cgrules {
+        let mount = toml
+            .as_ref()
+            .map(|c| c.mount.clone())
+            .or_else(|| cgfs::find_mount().ok());
+        let Some(mount) = mount else {
+            log_msg(LOG_ERR, "cgrules=: no cgroup2 mount");
+            return if fail_closed {
+                PAM_SESSION_ERR
+            } else {
+                PAM_SUCCESS
+            };
+        };
+        let dir = args.rules_dir().map(std::path::Path::new);
+        match classify::classify(
+            &mount,
+            std::path::Path::new(cgrules),
+            dir,
+            args.cgconfig.as_deref().map(std::path::Path::new),
+            &user,
+            pid,
+        ) {
+            Ok(Some(path)) => {
+                log_msg(
+                    LOG_INFO,
+                    &format!("cgrules uid={} pid={} at {}", user.uid, pid, path.display()),
+                );
+            }
+            Ok(None) => {}
+            Err(e) => {
+                log_msg(LOG_ERR, &format!("cgrules: {e}"));
+                if fail_closed {
+                    return PAM_SESSION_ERR;
+                }
+            }
+        }
+    }
+
+    PAM_SUCCESS
 }
 
 fn cfg_fail_closed(path: &str) -> bool {

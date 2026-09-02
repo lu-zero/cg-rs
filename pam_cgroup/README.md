@@ -52,12 +52,21 @@ sudo cargo run -- apply --config examples/probe.toml --user "$USER" --pid "$PID"
 ## PAM (not enabled by this prototype)
 
 ```text
-session optional libpam_cgroup_rs.so config=/etc/cgroup/pam_cgroup.toml
+session optional pam_cgroup.so config=/etc/cgroup/pam_cgroup.toml
 ```
 
 Copy `examples/pam_cgroup.toml` to `/etc/cgroup/pam_cgroup.toml`.
 `fail_closed = false` (default) logs failures and still returns success so
 an `optional` stack cannot lock you out.
+
+Optional libcgroup-style classify after the TOML `[[place]]` tree is
+created — drop-ins default to `/etc/cgrules.d` when `cgrules=` is set;
+`cgrules.d=` with an empty value turns them off:
+
+```text
+session optional pam_cgroup.so config=/etc/cgroup/pam_cgroup.toml \
+    cgrules=/etc/cgrules.conf cgconfig=/etc/cgconfig.conf
+```
 
 ## License
 
