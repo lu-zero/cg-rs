@@ -1,22 +1,23 @@
 [workspace]
 resolver = "2"
-members = ["cgconfig", "cgfs", "cg_nss", "pam_cgroup", "cgctl", "cgrulesd"]
+members = ["cgconfig", "cgfs", "cgcore", "pam_cgroup", "cgctl", "cgrulesd"]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/lu_zero/cg-rs"
 
 [workspace.dependencies]
 cgconfig = { path = "cgconfig", version = "0.1.0" }
 cgfs = { path = "cgfs", version = "0.1.0" }
-cg_nss = { path = "cg_nss", version = "0.1.0" }
+cgcore = { path = "cgcore", version = "0.1.0" }
 winnow = "1"
 miette = { version = "7", default-features = false }
 libc = "0.2"
+nix = { version = "0.31", default-features = false, features = ["user"] }
 rustix = { version = "1", features = ["fs", "process"] }
 serde = { version = "1", features = ["derive"] }
-toml = "0.8"
+toml = "1"
 tempfile = "3"

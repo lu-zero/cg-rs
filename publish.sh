@@ -15,7 +15,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
-CRATES=(cgconfig cgfs cgctl cgrulesd pam_cgroup)
+CRATES=(cgconfig cgfs cgcore cgctl cgrulesd pam_cgroup)
 
 DRY_RUN=0
 FAST=0

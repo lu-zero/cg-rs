@@ -14,9 +14,10 @@ translation layer to **cgroup v2** leaves.
   (`\%` escapes). `load_cgrules` also reads a drop-in directory
   (`/etc/cgrules.d`), files sorted by name.
 - `model` — shared types and placeholder expansion. libc-free: user/group
-  resolution stays with the caller (`Identity`).
+  resolution stays with the caller (`Identity`); the Linux workspace layer
+  `cgcore` supplies that integration.
 - `v2` — expand a group/template into a `LeafPlan` (path, owners, modes,
-  `subtree_control`) for consumers like `pam_cgroup` and `jobacct`.
+  `subtree_control`) for filesystem and application consumers.
 
 ```rust
 use cgconfig::{parse_cgconfig, parse_cgrules, first_rule, plan_template, Identity};

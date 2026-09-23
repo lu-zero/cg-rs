@@ -1,4 +1,4 @@
-//! cgroup2 mount point and self-hierarchy discovery.
+//! cgroup2 mount point discovery.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use rustix::fs::statfs;
 
 /// Conventional mount point, used when mountinfo says nothing.
-pub const DEFAULT_MOUNT: &str = "/sys/fs/cgroup";
+pub(crate) const DEFAULT_MOUNT: &str = "/sys/fs/cgroup";
 
 /// `statfs(2)` superblock magic for cgroup2; a stable kernel ABI value
 /// (linux-raw-sys carries it, rustix does not re-export it).
@@ -23,7 +23,7 @@ pub(crate) fn is_cgroup2(path: &Path) -> bool {
 /// Reads `/proc/self/mountinfo` first (handles non-standard mounts, each
 /// candidate verified by superblock magic), then falls back to
 /// [`DEFAULT_MOUNT`] if it really is a cgroup2 filesystem.
-pub fn find_mount() -> io::Result<PathBuf> {
+pub(crate) fn find_mount() -> io::Result<PathBuf> {
     if let Ok(text) = std::fs::read_to_string("/proc/self/mountinfo") {
         for line in text.lines() {
             if let Some(mp) = parse_mountinfo_line(line) {
@@ -106,43 +106,6 @@ pub(crate) fn parse_mountinfo_line(line: &str) -> Option<PathBuf> {
     Some(PathBuf::from(unescape_mount(raw)))
 }
 
-/// This process's cgroup path *relative to* the cgroup2 hierarchy
-/// (`0::/…` line of `/proc/self/cgroup`).
-pub fn self_relative() -> io::Result<PathBuf> {
-    let text = std::fs::read_to_string("/proc/self/cgroup")?;
-    parse_v2_rel(&text)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "not in a cgroup v2 hierarchy"))
-}
-
-pub(crate) fn parse_v2_rel(text: &str) -> Option<PathBuf> {
-    for line in text.lines() {
-        if let Some(rest) = line.strip_prefix("0::") {
-            let p = rest.trim();
-            return Some(if p.is_empty() {
-                PathBuf::from("/")
-            } else {
-                PathBuf::from(p)
-            });
-        }
-    }
-    None
-}
-
-/// Append a hierarchy-relative path to the mount point; `/` collapses away.
-/// Relative inputs without a leading `/` are also appended.
-pub fn join(mount: &Path, rel: &Path) -> PathBuf {
-    if rel.as_os_str().is_empty() || rel == Path::new("/") {
-        return mount.to_path_buf();
-    }
-    if let Ok(r) = rel.strip_prefix("/") {
-        if r.as_os_str().is_empty() {
-            return mount.to_path_buf();
-        }
-        return mount.join(r);
-    }
-    mount.join(rel)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,31 +132,6 @@ mod tests {
         // space gets escaped.
         assert_eq!(unescape_mount("caf\u{e9}\\040dir"), "café dir");
         assert_eq!(unescape_mount("plain\\040space"), "plain space");
-    }
-
-    #[test]
-    fn parses_self_cgroup() {
-        assert_eq!(
-            parse_v2_rel("0::/openrc.sshd\n").unwrap(),
-            PathBuf::from("/openrc.sshd")
-        );
-        assert_eq!(parse_v2_rel("0::/\n").unwrap(), PathBuf::from("/"));
-        assert_eq!(
-            parse_v2_rel("12:pids:/\n0::/foo/bar\n").unwrap(),
-            PathBuf::from("/foo/bar")
-        );
-        assert!(parse_v2_rel("1:cpu:/a\n").is_none());
-    }
-
-    #[test]
-    fn join_strips_root() {
-        let m = Path::new("/sys/fs/cgroup");
-        assert_eq!(join(m, Path::new("/")), m);
-        assert_eq!(join(m, Path::new("/")), m);
-        assert_eq!(
-            join(m, Path::new("/openrc.sshd")),
-            PathBuf::from("/sys/fs/cgroup/openrc.sshd")
-        );
     }
 
     #[test]

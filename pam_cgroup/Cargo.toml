@@ -29,7 +29,11 @@ serde = { workspace = true }
 toml = { workspace = true }
 cgfs = { workspace = true }
 cgconfig = { workspace = true }
-cg_nss = { workspace = true }
+cgcore = { workspace = true }
+
+[dev-dependencies]
+cgfs = { workspace = true, features = ["test-utils"] }
+tempfile = { workspace = true }
 
 # cargo cinstall --prefix=/usr --libdir=/usr/lib64
 #   $libdir/security/pam_cgroup.so  (install_subdir = plugin dir)

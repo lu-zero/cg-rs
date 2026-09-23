@@ -24,7 +24,7 @@ use crate::model::{ConfigFile, Identity, Node};
 /// A concrete leaf to create under the (single) v2 mount point.
 ///
 /// Ownership strings stay symbolic (`root`, `%u` already expanded); resolve
-/// them with your passwd/group layer.
+/// them with your passwd/group layer, such as the workspace's `cgcore` crate.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LeafPlan {
     /// Path relative to the mount point, placeholders expanded.

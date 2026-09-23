@@ -5,44 +5,46 @@
 [![docs.rs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs)
 
 cgroupfs **v2** management primitives — the *write* half of the cgroup
-filesystem. rustix-backed, no controller opinions.
+filesystem. Every mutating operation is rooted at a verified `Hierarchy` and
+uses descriptor-relative resolution, so an arbitrary absolute path cannot be
+passed to an apply/delete/write operation.
 
 Companion to [`cgconfig`](../cgconfig) (parsers for the legacy libcgroup
 formats) and the read/stats crates (`below/cgroupfs`, `cgroups-rs`).
 
 ```rust
-use cgfs::{find_mount, join, LeafSpec};
-use std::path::Path;
+use cgfs::{Hierarchy, LeafSpec};
 
-let mount = find_mount()?;
-let spec = LeafSpec {
-    path: join(&mount, Path::new("users/lu_zero/session")),
-    uid: Some(1000),
-    gid: Some(1000),
-    dperm: Some(0o775),
-    fperm: Some(0o664),
-    task_fperm: None,
-    task_uid: None,
-    task_gid: None,
-    subtree_control: vec!["cpu".into(), "memory".into()],
-};
-cgfs::apply(&spec, Some(std::process::id()))?;
+fn main() -> std::io::Result<()> {
+    let hierarchy = Hierarchy::discover()?;
+    let session = hierarchy.at_path("users/lu_zero/session")?;
+    let spec = LeafSpec::new()
+        .uid(1000)
+        .gid(1000)
+        .dperm(0o775)
+        .fperm(0o664)
+        .subtree_control(&["cpu".to_owned(), "memory".to_owned()]);
+    session.apply(&spec, Some(std::process::id()))?;
+    Ok(())
+}
 ```
 
-- **apply** — mkdir, chown, chmod (`dperm`/`fperm`/`task_fperm`),
-  `+ctrl +ctrl` into `cgroup.subtree_control`, optional pid attach. Only
-  the leaf itself (`spec.path`) is chowned to `uid`/`gid` and re-asserted
-  on every re-apply (delegation wants what libcgroup skipped); ancestors
-  created along the way get `dperm`'s read/execute but never group/other
-  write, and keep their creator's ownership — a shared ancestor must not
-  end up delegated to whichever leaf happens to materialise it first.
-  Refuses a `path` containing `..`, a literal `.` segment, or a trailing
-  `/`, and refuses to operate through a symlink anywhere in the chain.
-- **delete_tree / delete_leaf** — children-first rmdir; refuses to remove
-  the mount point itself; as strict as the kernel about non-empty dirs.
-- **list_groups** — relative, sorted walker.
-- **raw layer** — `read_string` / `read_kv` (flat-keyed files) /
-  `read_u64` (`Ok(None)` when a controller file is absent) / `write_file`
-  (`cgset` primitive) / `procs`.
+- **Hierarchy / Cgroup** — `discover()` verifies cgroup2 with `statfs`; cgroup
+  paths are validated relative components and resolved with `openat2` using
+  `RESOLVE_BENEATH`, `RESOLVE_NO_XDEV`, `RESOLVE_NO_SYMLINKS`, and
+  `RESOLVE_NO_MAGICLINKS`.
+- **Cgroup::apply** — creates missing ancestors, applies ownership/modes,
+  configures controllers, and optionally attaches a pid. Existing ancestors
+  keep their creator ownership and never receive group/other write bits.
+- **ControlFile** — direct, validated control-file reads/writes (`read_string`,
+  `read_kv`, `read_u64`, `write`, and `procs`).
+- **Cgroup::delete_leaf / delete_tree** — descriptor-relative, children-first
+  removal that refuses the hierarchy root and symlink traversal.
+- **Cgroup::entries / list_groups / metadata** — read-only traversal and
+  inspection through the verified handle.
+- **self_relative** — parse `/proc/self/cgroup` into a validated `CgroupPath`.
 
-Linux only. License: MIT OR Apache-2.0.
+The safe API requires Linux `openat2` support (Linux 5.6+); it fails
+explicitly rather than falling back to weaker path checks. Linux only.
+
+License: MIT OR Apache-2.0

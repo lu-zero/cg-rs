@@ -3,13 +3,13 @@
 //! unified hierarchy: no netlink, no v1.
 
 mod enforce;
-mod nss;
 
 use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
 use cgconfig::{load_cgrules, parse_cgconfig_in, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
+use cgfs::Hierarchy;
 
 fn usage() -> ! {
     eprintln!(
@@ -115,10 +115,10 @@ fn run(opts: &Opts) -> io::Result<()> {
                     tracked_templates.clear();
                     last_loaded = Some((rules.clone(), cfg.clone()));
                 }
-                let mount = match cgfs::find_mount() {
-                    Ok(m) => m,
+                let hierarchy = match Hierarchy::discover() {
+                    Ok(h) => h,
                     Err(e) => {
-                        eprintln!("cgrulesd: find_mount: {e}");
+                        eprintln!("cgrulesd: discover hierarchy: {e}");
                         if opts.once {
                             return Err(e);
                         }
@@ -128,7 +128,7 @@ fn run(opts: &Opts) -> io::Result<()> {
                 };
                 let rows = gather(std::process::id());
                 let out = match enforce::enforce_once(
-                    &mount,
+                    &hierarchy,
                     &rules,
                     &cfg,
                     &rows,
@@ -147,7 +147,7 @@ fn run(opts: &Opts) -> io::Result<()> {
                     }
                 };
                 if !opts.once {
-                    enforce::reap_idle_templates(&mut tracked_templates, opts.verbose);
+                    enforce::reap_idle_templates(&hierarchy, &mut tracked_templates, opts.verbose);
                 }
                 if opts.verbose {
                     eprintln!(
@@ -195,7 +195,7 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
         let Some(cgroup) = cgroup_rel(&p.join("cgroup")) else {
             continue;
         };
-        let user = nss::name_from_uid(uid);
+        let user = cgcore::name_from_uid(uid);
         let groups = cache.groups_for(&user, gid);
         let exe = std::fs::read_link(p.join("exe"))
             .ok()
@@ -221,7 +221,7 @@ fn gather(self_pid: u32) -> Vec<enforce::ProcRow> {
 /// Re-read `/proc/<pid>` immediately before attach so a recycled pid
 /// from later in this pass is not moved. starttime pins the identity
 /// across two processes of the same user with the same comm; a race
-/// remains inside `cgfs::apply` itself.
+/// remains inside the descriptor-relative cgroup apply operation.
 fn still_same_process(row: &enforce::ProcRow) -> bool {
     let p = std::path::Path::new("/proc").join(row.pid.to_string());
     let Some((uid, gid)) = status_ids(&p.join("status")) else {

@@ -4,13 +4,10 @@
 //! matching/moving logic is testable without a live `/proc`.
 
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::{self};
-use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::io;
 
 use cgconfig::model::{first_rule_names, ConfigFile, Identity};
-use cgfs::LeafSpec;
+use cgfs::{Cgroup, CgroupPath, Hierarchy, LeafSpec};
 
 /// One process as seen by the poller.
 #[derive(Clone, Debug)]
@@ -59,13 +56,13 @@ pub struct Outcome {
 /// later pass it to [`reap_idle_templates`]. Owned by the caller (one
 /// `HashSet` for the life of the daemon), not reset each pass.
 pub fn enforce_once(
-    mount: &Path,
+    hierarchy: &Hierarchy,
     rules: &[cgconfig::Rule],
     cfg: &ConfigFile,
     procs: &[ProcRow],
     verbose: bool,
     revalidate: impl Fn(&ProcRow) -> bool,
-    tracked_templates: &mut HashSet<PathBuf>,
+    tracked_templates: &mut HashSet<CgroupPath>,
 ) -> io::Result<Outcome> {
     let mut out = Outcome::default();
     let mut missing: Vec<String> = Vec::new();
@@ -83,7 +80,7 @@ pub fn enforce_once(
             name: row.user.clone(),
             uid: row.uid.to_string(),
             gid: row.gid.to_string(),
-            group: nss_name_from_gid(row.gid),
+            group: cgcore::name_from_gid(row.gid),
             proc_name: row.comm.clone(),
             pid: row.pid.to_string(),
         };
@@ -100,9 +97,21 @@ pub fn enforce_once(
             );
             continue;
         }
-        let Some((spec, is_template)) =
-            leaf_spec(cfg, &dest, &rule.destination.0, &identity, mount)
-        else {
+        let destination = match leaf_spec(hierarchy, cfg, &dest, &rule.destination.0, &identity) {
+            Ok(destination) => destination,
+            Err(e) => {
+                out.missing_destination += 1;
+                eprintln!(
+                    "cgrulesd: pid {} cannot resolve destination {:?}: {e}",
+                    row.pid, dest
+                );
+                if !missing.contains(&dest) {
+                    missing.push(dest.clone());
+                }
+                continue;
+            }
+        };
+        let Some((target, spec, is_template)) = destination else {
             out.missing_destination += 1;
             if !missing.contains(&dest) {
                 missing.push(dest.clone());
@@ -112,7 +121,7 @@ pub fn enforce_once(
         // Track even if apply fails after mkdir, or a restart orphans
         // the dest from this in-memory set.
         if is_template {
-            tracked_templates.insert(spec.path.clone());
+            tracked_templates.insert(target.path().clone());
         }
         if norm(&row.cgroup) == dest {
             out.already_placed += 1;
@@ -127,7 +136,7 @@ pub fn enforce_once(
             }
             continue;
         }
-        if let Err(e) = cgfs::apply(&spec, Some(row.pid)) {
+        if let Err(e) = target.apply(&spec, Some(row.pid)) {
             if e.kind() == io::ErrorKind::NotFound
                 || e.raw_os_error() == Some(libc::ESRCH)
                 || e.raw_os_error() == Some(libc::ENOENT)
@@ -162,23 +171,31 @@ pub fn enforce_once(
 /// between the empty-check and the delete stays tracked. A missing path
 /// is untracked rather than retried. Call after `enforce_once` only when
 /// polling continuously — `--once` never reaps.
-pub fn reap_idle_templates(tracked_templates: &mut HashSet<PathBuf>, verbose: bool) {
+pub fn reap_idle_templates(
+    hierarchy: &Hierarchy,
+    tracked_templates: &mut HashSet<CgroupPath>,
+    verbose: bool,
+) {
     tracked_templates.retain(|path| {
+        let cgroup = hierarchy.at(path.clone());
         // A `cgroup.procs` that can't be read (missing entirely, say) is
         // treated the same as empty rather than as "still occupied": the
         // real safety check is delete_leaf's rmdir below, which the
         // kernel refuses on genuine occupants regardless of what this
         // read said, so there's nothing to lose by attempting it.
-        let empty = fs::read_to_string(path.join("cgroup.procs"))
-            .map(|s| s.trim().is_empty())
+        let empty = cgroup
+            .control("cgroup.procs")
+            .ok()
+            .and_then(|file| file.read_string().ok())
+            .map(|text| text.trim().is_empty())
             .unwrap_or(true);
         if !empty {
             return true; // still occupied: keep tracking
         }
-        match cgfs::delete_leaf(path) {
+        match cgroup.delete_leaf() {
             Ok(()) => {
                 if verbose {
-                    eprintln!("cgrulesd: reaped idle destination {}", path.display());
+                    eprintln!("cgrulesd: reaped idle destination {path}");
                 }
                 false // removed: stop tracking
             }
@@ -190,7 +207,7 @@ pub fn reap_idle_templates(tracked_templates: &mut HashSet<PathBuf>, verbose: bo
             // expected "still in use" outcome, not worth logging.
             Err(e) if e.raw_os_error() == Some(libc::EBUSY) => true,
             Err(e) => {
-                eprintln!("cgrulesd: reap {}: {e}", path.display());
+                eprintln!("cgrulesd: reap {path}: {e}");
                 true // unexpected error: keep tracking, retry next call
             }
         }
@@ -215,16 +232,6 @@ fn is_rt_task(pid: u32) -> bool {
     pol == libc::SCHED_FIFO || pol == libc::SCHED_RR
 }
 
-fn dest_path(mount: &Path, dest: &str) -> PathBuf {
-    let mut p = mount.to_path_buf();
-    for part in dest.split('/') {
-        if !part.is_empty() {
-            p.push(part);
-        }
-    }
-    p
-}
-
 /// A resolved destination, and whether it's eligible for reaping once idle.
 ///
 /// Only a *template* match is: cgrulesd materialised it on demand. A
@@ -232,33 +239,26 @@ fn dest_path(mount: &Path, dest: &str) -> PathBuf {
 /// matches a directory that already existed. A shallow `template %p`
 /// that names an existing sibling is treated as admin intent.
 fn leaf_spec(
+    hierarchy: &Hierarchy,
     cfg: &ConfigFile,
     dest: &str,
     template_name: &str,
     identity: &Identity,
-    mount: &Path,
-) -> Option<(LeafSpec, bool)> {
+) -> io::Result<Option<(Cgroup, LeafSpec, bool)>> {
     // Exact group wins by expanded name; otherwise the template named by
     // the *raw* rule destination provides owners/modes/controllers.
     if let Some((plan, is_template)) =
         cgconfig::plan_destination(cfg, dest, template_name, identity)
     {
-        return Some((
-            LeafSpec {
-                path: dest_path(mount, dest),
-                uid: resolve_user(plan.owner_uid.as_deref()),
-                gid: resolve_group(plan.owner_gid.as_deref()),
-                dperm: plan.dir_mode,
-                fperm: plan.file_mode,
-                task_fperm: plan.tasks_file_mode,
-                task_uid: resolve_user(plan.task_uid.as_deref()),
-                task_gid: resolve_group(plan.task_gid.as_deref()),
-                subtree_control: plan.subtree_control.clone(),
-            },
-            is_template,
-        ));
+        let (target, spec) = cgcore::resolve_plan(hierarchy, &plan)?;
+        return Ok(Some((target, spec, is_template)));
     }
 
+    let target = match hierarchy.at_path(dest) {
+        Ok(target) => target,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     // No config entry: an existing directory (created by PAM or the
     // admin) is still a valid destination, but only when its
     // cgroup.procs is *already* owned by the identity being placed.
@@ -268,62 +268,23 @@ fn leaf_spec(
     // e.g. a rule destination of "%p" with comm = "system.slice" — and
     // get moved into whatever limits that cgroup happens to carry,
     // instead of only ever reaching a cgroup that was already theirs.
-    // This means a literal, placeholder-free destination shared by
-    // several different users (e.g. "@devs * shared_pool") now needs a
-    // real cgconfig.conf group/template entry: no single uid owns a
-    // genuinely shared cgroup.procs, so this fallback can no longer
-    // serve that case.
-    let path = dest_path(mount, dest);
-    let procs = path.join("cgroup.procs");
     let owned_by_identity = identity.uid.parse::<u32>().ok().is_some_and(|uid| {
-        fs::metadata(&procs)
-            .map(|m| m.uid() == uid)
-            .unwrap_or(false)
+        target
+            .control("cgroup.procs")
+            .ok()
+            .and_then(|file| file.metadata().ok())
+            .is_some_and(|metadata| metadata.uid == uid)
     });
-    owned_by_identity.then(|| (LeafSpec::new(path), false))
+    Ok(owned_by_identity.then(|| (target, LeafSpec::new(), false)))
 }
 
-fn resolve_user(name: Option<&str>) -> Option<u32> {
-    name.and_then(|n| crate::nss::resolve("user", n).ok())
-}
-fn resolve_group(name: Option<&str>) -> Option<u32> {
-    name.and_then(|n| crate::nss::resolve("group", n).ok())
-}
 fn norm(rel: &str) -> String {
     rel.trim_matches('/').to_owned()
 }
 
-pub(crate) fn nss_name_from_gid(gid: u32) -> String {
-    crate::nss::name_from_gid(gid)
-}
-
 /// Supplementary groups for a user via getgrouplist(3).
 pub(crate) fn groups_of(user: &str, gid: u32) -> Vec<String> {
-    let cuser = match std::ffi::CString::new(user) {
-        Ok(c) => c,
-        Err(_) => return Vec::new(),
-    };
-    let mut gids: Vec<libc::gid_t> = vec![0; 32];
-    loop {
-        let mut n: libc::c_int = gids.len() as libc::c_int;
-        let rc = unsafe {
-            libc::getgrouplist(
-                cuser.as_ptr(),
-                gid as libc::gid_t,
-                gids.as_mut_ptr(),
-                &mut n,
-            )
-        };
-        if rc >= 0 {
-            gids.truncate(n as usize);
-            break;
-        }
-        if gids.len() > 4096 {
-            return Vec::new();
-        }
-        gids.resize(n.max(1) as usize * 2, 0);
-    }
-    gids.iter().map(|g| crate::nss::name_from_gid(*g)).collect()
+    cgcore::supplementary_groups(user, gid).unwrap_or_default()
 }
 
 /// Cache wrapper for repeated lookups during one pass.
@@ -344,6 +305,11 @@ mod tests {
     use super::*;
     use cgconfig::{parse_cgconfig, parse_cgrules};
     use std::fs;
+    use std::path::Path;
+
+    fn test_hierarchy(path: &Path) -> Hierarchy {
+        unsafe { cgfs::Hierarchy::open_for_test(path) }.unwrap()
+    }
 
     fn prep_dir(path: &Path) {
         fs::create_dir_all(path).unwrap();
@@ -354,7 +320,7 @@ mod tests {
     fn me() -> (u32, u32, String) {
         let uid = unsafe { libc::geteuid() } as u32;
         let gid = unsafe { libc::getegid() } as u32;
-        (uid, gid, crate::nss::name_from_uid(uid))
+        (uid, gid, cgcore::name_from_uid(uid))
     }
 
     #[test]
@@ -378,7 +344,7 @@ mod tests {
         }];
 
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -417,7 +383,7 @@ mod tests {
         }];
 
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -459,7 +425,7 @@ mod tests {
         }];
 
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -496,7 +462,7 @@ mod tests {
         }];
 
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -551,7 +517,7 @@ mod tests {
             },
         ];
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -591,7 +557,7 @@ mod tests {
             starttime: 0,
         }];
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -609,7 +575,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
         let cfg_text = format!(
-            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {uid}; }} admin {{ dperm = 750; }} }}\n cpu {{}}\n}}\n"
+            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n cpu {{}}\n}}\n"
         );
         let cfg = parse_cgconfig(&cfg_text).unwrap();
         let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
@@ -626,7 +592,7 @@ mod tests {
             starttime: 0,
         }];
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -657,10 +623,13 @@ mod tests {
         // why that file has to be removed, not just emptied, to let the
         // sandboxed rmdir succeed).
         let cfg_text = format!(
-            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {uid}; }} admin {{ dperm = 750; }} }}\n}}\n"
+            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n}}\n"
         );
         let cfg = parse_cgconfig(&cfg_text).unwrap();
         let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+        let target = tmp.path().join(format!("students/{uname}"));
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("cgroup.procs"), "").unwrap();
 
         let rows = vec![ProcRow {
             pid: 778,
@@ -675,7 +644,7 @@ mod tests {
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -687,19 +656,23 @@ mod tests {
         assert_eq!(out.moved, 1, "{out:?}");
 
         let dir = tmp.path().join(format!("students/{uname}"));
-        assert!(tracked.contains(&dir), "template match must be tracked");
+        assert!(
+            tracked.contains(&CgroupPath::parse(format!("students/{uname}")).unwrap()),
+            "template match must be tracked"
+        );
 
         // The process exits: cgroup.procs goes empty. On a real cgroupfs
         // the kernel's own rmdir for a cgroup directory only cares about
-        // live tasks/children — cgroup.procs and friends are kernel-
-        // synthesized, not ordinary directory entries for emptiness
-        // purposes, so an idle leaf's rmdir succeeds despite them. This
-        // fake tmpdir-backed leaf has cgroup.procs as a genuine regular
-        // file, which *would* block a plain rmdir regardless of its
-        // content — remove it too, to simulate what the kernel actually
-        // allows rather than what bare POSIX rmdir would.
-        fs::remove_file(dir.join("cgroup.procs")).unwrap();
-        reap_idle_templates(&mut tracked, false);
+        // live tasks/children — control files are kernel-synthesized,
+        // not ordinary directory entries for emptiness purposes, so an
+        // idle leaf's rmdir succeeds despite them. This fake tmpdir-backed
+        // leaf has those files as genuine regular entries, which *would*
+        // block a plain rmdir regardless of content — remove them too,
+        // to simulate what the kernel actually allows.
+        for name in cgfs::CONTROL_FILES {
+            fs::remove_file(dir.join(name)).unwrap();
+        }
+        reap_idle_templates(&test_hierarchy(tmp.path()), &mut tracked, false);
 
         assert!(tracked.is_empty(), "reaped path must stop being tracked");
         assert!(!dir.exists(), "idle template destination must be removed");
@@ -715,10 +688,13 @@ mod tests {
         fs::write(dir.join("cgroup.procs"), "1234\n").unwrap();
 
         let mut tracked = HashSet::new();
-        tracked.insert(dir.clone());
-        reap_idle_templates(&mut tracked, false);
+        tracked.insert(CgroupPath::parse("occupied").unwrap());
+        reap_idle_templates(&test_hierarchy(tmp.path()), &mut tracked, false);
 
-        assert!(tracked.contains(&dir), "an occupied path must stay tracked");
+        assert!(
+            tracked.contains(&CgroupPath::parse("occupied").unwrap()),
+            "an occupied path must stay tracked"
+        );
         assert!(dir.exists(), "an occupied path must not be removed");
     }
 
@@ -750,7 +726,7 @@ mod tests {
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -767,7 +743,7 @@ mod tests {
         let dir = tmp.path().join(format!("students/{uname}"));
         assert!(dir.exists(), "mkdir must have run before the chown failure");
         assert!(
-            tracked.contains(&dir),
+            tracked.contains(&CgroupPath::parse(format!("students/{uname}")).unwrap()),
             "must be tracked despite apply failing after mkdir"
         );
     }
@@ -782,7 +758,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
         let cfg_text = format!(
-            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {uid}; }} admin {{ dperm = 750; }} }}\n}}\n"
+            "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n}}\n"
         );
         let cfg = parse_cgconfig(&cfg_text).unwrap();
         let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
@@ -801,7 +777,7 @@ mod tests {
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -812,7 +788,7 @@ mod tests {
         .unwrap();
         assert_eq!(out.already_placed, 1, "{out:?}");
         assert!(
-            tracked.contains(&tmp.path().join(dest_rel)),
+            tracked.contains(&CgroupPath::parse(&dest_rel).unwrap()),
             "already-placed template destination must still be tracked"
         );
     }
@@ -840,7 +816,7 @@ mod tests {
         }];
         let mut tracked = HashSet::new();
         let out = enforce_once(
-            tmp.path(),
+            &test_hierarchy(tmp.path()),
             &rules,
             &cfg,
             &rows,
@@ -857,7 +833,7 @@ mod tests {
 
         let dir = tmp.path().join("pool");
         fs::write(dir.join("cgroup.procs"), "").unwrap();
-        reap_idle_templates(&mut tracked, false); // nothing tracked: no-op
+        reap_idle_templates(&test_hierarchy(tmp.path()), &mut tracked, false); // nothing tracked: no-op
         assert!(
             dir.exists(),
             "a group destination must persist regardless of occupancy"

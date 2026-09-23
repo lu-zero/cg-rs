@@ -130,8 +130,8 @@ fn utf8_step(b: &[u8]) -> usize {
 /// which would resolve to the mount root itself, or — for a trailing `/`
 /// or `.` specifically — make the *final* component of the resulting path
 /// resolve as a directory at the syscall level, transparently following it
-/// if it turns out to be a symlink; see `cgfs::apply`, which guards the
-/// same thing for the identical reason).
+/// if it turns out to be a symlink; see `cgfs::Cgroup::apply`, which guards
+/// the same thing for the identical reason).
 ///
 /// Most placeholders (`%u`, `%g`, …) are constrained by the system (a POSIX
 /// username can't contain `/`), but `%p` — process name — comes straight
@@ -518,8 +518,8 @@ mod tests {
         // still makes the *final* component of the resulting filesystem
         // path resolve as a directory at the syscall level (lstat's
         // trailing-slash/"/." rule), transparently following it if it
-        // turns out to be a symlink — the same reason cgfs::apply rejects
-        // this spelling. Path::components() can't see either spelling
+        // turns out to be a symlink — the same reason cgfs::Cgroup::apply
+        // rejects this spelling. Path::components() can't see either spelling
         // (both normalize away silently), which is exactly why this
         // needs its own raw-byte check rather than relying on components().
         assert!(!is_safe_relative_path("apps/."));

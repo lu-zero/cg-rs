@@ -6,12 +6,12 @@ Run from the workspace root; all four must be clean before committing:
 
 ```text
 cargo fmt --all -- --check
-cargo clippy --workspace --all-features
+cargo clippy --workspace --all-features -- -D warnings
 RUSTDOCFLAGS='-D warnings' cargo doc --workspace --no-deps
 cargo test --workspace
 ```
 
-`cgfs` and `pam_cgroup` are Linux-only by design (`compile_error!`
+`cgfs`, `cgcore`, and `pam_cgroup` are Linux-only by design (`compile_error!`
 guards); `cgconfig` is portable. `pam_cgroup` needs `cargo-c` only for
 `cbuild`/`cinstall`, not for the test suite.
 
@@ -32,27 +32,29 @@ place — and starts with a use case, since no OpenPAM host has cgroups.
 ## MSRV
 
 The workspace tracks **latest stable** dependencies and bumps
-`rust-version` as needed (currently **1.85**, driven by edition-2024
-transitive deps like getrandom). Do not pin crates to older releases to
+`rust-version` as needed (currently **1.88**, driven by latest transitive
+dependencies such as ICU and textwrap). Do not pin crates to older releases to
 satisfy a lower MSRV. `Cargo.lock` is untracked, so CI's fresh
-resolution must stay compatible — the 1.85 matrix leg enforces it.
+resolution must stay compatible — the 1.88 matrix leg enforces it.
 
 ## Layout
 
 - `cgconfig/` — parsers + model + `%u` template expansion + v2 planning.
   Depends on winnow and protocol-only miette (`default-features = false`;
   dev-deps add `fancy-no-backtrace` for rendered-output tests).
-- `cgfs/` — cgroupfs v2 write side: apply/delete/walk/raw control files.
+- `cgfs/` — cgroupfs v2 write side: verified hierarchy/cgroup handles, descriptor-relative apply/delete/walk, and validated control files.
   rustix-backed, Linux-gated (statfs-verified mounts).
+- `cgcore/` — shared NSS identity resolution and `cgconfig::LeafPlan` → `cgfs`
+  application glue used by the Linux tools.
 - `pam_cgroup/` — PAM module (cdylib via cargo-c) + `pam-cgroup` CLI.
-  Consumes `cgfs`; TOML config is its own (`config=`). Optional `cgrules=`
-  / `cgrules.d=` / `cgconfig=` classify the login pid after `[[place]]`.
+  Consumes `cgfs` and `cgcore`; TOML config is its own (`config=`). Optional
+  `cgrules=` / `cgrules.d=` / `cgconfig=` classify the login pid after `[[place]]`.
   `pam_sm_open_session` catches panics at the ABI boundary
   (`catch_unwind` → `PAM_SESSION_ERR`); default `panic=unwind`.
   The capi section uses `plugin = true` (`pam_cgroup.so` in
   `$libdir/security`, no .a/.pc); needs **cargo-c ≥ 0.10.25**
   (earlier versions ignore the key and install the legacy layout).
-- `cgctl/` — busybox CLI over cgconfig+cgfs (`config`, `ls`, `get`,
+- `cgctl/` — busybox CLI over cgconfig+cgfs+cgcore (`config`, `ls`, `get`,
   `set`, `classify`, `exec`, `delete`, `snapshot`). Linux-only via cgfs.
 - `cgrulesd/` — poll-based enforcement of cgrules.conf plus `/etc/cgrules.d`
   (sorted drop-ins; missing dir is fine; `--no-config-dir` skips them).

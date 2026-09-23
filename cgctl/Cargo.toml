@@ -16,11 +16,12 @@ path = "src/main.rs"
 [dependencies]
 cgconfig = { workspace = true }
 cgfs = { workspace = true }
-cg_nss = { workspace = true }
+cgcore = { workspace = true }
 libc = { workspace = true }
 miette = { workspace = true, features = ["fancy"] }
 
 [dev-dependencies]
+cgfs = { workspace = true, features = ["test-utils"] }
 tempfile = { workspace = true }
 
 [package.metadata.docs.rs]

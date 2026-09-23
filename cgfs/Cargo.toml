@@ -1,6 +1,6 @@
 [package]
 name = "cgfs"
-description = "cgroupfs v2 management: create, delegate, attach, delete, walk, raw control-file access"
+description = "safe cgroupfs v2 hierarchy, delegation, attachment, deletion, and control-file access"
 keywords = ["cgroup", "cgroupv2", "cgroupfs", "linux"]
 categories = ["os::unix-apis"]
 version.workspace = true
@@ -8,6 +8,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
+
+[features]
+# Enables the explicit unsafe fake-root constructor used by dependent crate tests.
+test-utils = []
 
 [dependencies]
 rustix = { workspace = true }

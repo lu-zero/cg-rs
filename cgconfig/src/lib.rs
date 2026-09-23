@@ -6,10 +6,11 @@
 //!   rules, `%u %U %g %G %p %P` placeholders, `\%` escapes, ditto `%`.
 //! * [`model`] — the shared data model and placeholder expansion.
 //! * [`v2`] — translate legacy definitions into a cgroup **v2** leaf plan
-//!   (`LeafPlan`) usable by `pam_cgroup` and `jobacct`.
+//!   (`LeafPlan`) for filesystem and application consumers.
 //!
 //! The crate is libc-free: user/group resolution stays with the caller via
-//! [`model::Identity`].
+//! [`model::Identity`]. The workspace's `cgcore` crate supplies that layer
+//! for the Linux tools.
 //!
 //! # Example
 //!

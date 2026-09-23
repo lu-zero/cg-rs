@@ -1,14 +1,14 @@
 use std::io;
-use std::path::{Path, PathBuf};
 
-use cgfs::LeafSpec;
+use cgfs::{Cgroup, CgroupPath, Hierarchy, LeafSpec};
 
 use crate::config::{Config, Place};
 use crate::user::{expand, resolve_id, User};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Step {
-    pub path: PathBuf,
+    /// Target handle, already bound to the hierarchy used for planning.
+    pub cgroup: Cgroup,
     pub uid: u32,
     pub gid: u32,
     pub mode: u32,
@@ -18,84 +18,43 @@ pub struct Step {
 }
 
 impl Config {
-    pub fn plan(&self, user: &User, _pid: u32) -> io::Result<Vec<Step>> {
+    pub fn plan(&self, hierarchy: &Hierarchy, user: &User, _pid: u32) -> io::Result<Vec<Step>> {
         self.place
             .iter()
-            .map(|p| step_for(&self.mount, p, user))
+            .map(|p| step_for(hierarchy, p, user))
             .collect()
     }
 }
 
 impl Step {
     fn to_spec(&self) -> LeafSpec {
-        LeafSpec {
-            path: self.path.clone(),
-            uid: Some(self.uid),
-            gid: Some(self.gid),
-            dperm: Some(self.mode),
-            fperm: Some(self.file_mode),
-            task_fperm: Some(self.file_mode),
-            task_uid: None,
-            task_gid: None,
-            subtree_control: self.subtree_control.clone(),
-        }
+        LeafSpec::new()
+            .uid(self.uid)
+            .gid(self.gid)
+            .dperm(self.mode)
+            .fperm(self.file_mode)
+            .task_fperm(self.file_mode)
+            .subtree_control(&self.subtree_control)
     }
 }
 
-fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
-    let rel = expand(&place.path, user);
-    let rel = rel.trim_start_matches('/');
-    // A bare "." (or, after the trim above, "" or "/") resolves to the
-    // mount root itself, not a leaf under it — same illegal-target class
-    // as `..`/absolute, just via the no-op component instead of an
-    // escaping one, so it needs the same rejection.
-    let mut has_normal = false;
-    for comp in std::path::Path::new(rel).components() {
-        match comp {
-            std::path::Component::ParentDir
-            | std::path::Component::RootDir
-            | std::path::Component::Prefix(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    format!(
-                        "place path {:?} contains illegal component {:?}",
-                        place.path, comp
-                    ),
-                ))
-            }
-            std::path::Component::Normal(_) => has_normal = true,
-            std::path::Component::CurDir => {}
-        }
-    }
-    if !has_normal {
+fn step_for(hierarchy: &Hierarchy, place: &Place, user: &User) -> io::Result<Step> {
+    let expanded = expand(&place.path, user);
+    let relative = expanded.trim_start_matches('/');
+    let path = CgroupPath::parse(relative).map_err(|e| {
+        io::Error::new(
+            e.kind(),
+            format!("place path {:?} is invalid: {e}", place.path),
+        )
+    })?;
+    if path.as_relative().as_os_str().is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!(
-                "place path {:?} resolves to empty (would be mount root)",
-                place.path
-            ),
-        ));
-    }
-    // A literal "." segment (anywhere, trailing included) and a bare
-    // trailing "/" both get normalized away by `Path::components()` —
-    // confirmed empirically (`Path::new("a/.")` and `Path::new("a/")`
-    // both iterate as just `[Normal("a")]`) — so neither is caught by
-    // the loop above. Both matter for the same reason cgfs::apply
-    // rejects them: they make the *final* component of the resulting
-    // path resolve as a directory at the syscall level, transparently
-    // following it if it's a symlink.
-    let raw = rel.as_bytes();
-    if raw.last() == Some(&b'/') || raw.split(|&b| b == b'/').any(|seg| seg == b".") {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            format!(
-                "place path {:?} contains a literal '.' segment or a trailing slash",
-                place.path
-            ),
+            format!("place path {:?} resolves to the hierarchy root", place.path),
         ));
     }
     Ok(Step {
-        path: mount.join(rel),
+        cgroup: hierarchy.at(path),
         uid: resolve_id(&place.uid, user, false)?,
         gid: resolve_id(&place.gid, user, true)?,
         mode: place.mode,
@@ -105,12 +64,13 @@ fn step_for(mount: &Path, place: &Place, user: &User) -> io::Result<Step> {
     })
 }
 
-/// Create / chown / chmod / enable controllers / attach — via [`cgfs`].
-/// Re-applies ownership if the cgroup already exists (libcgroup skips that).
-pub fn apply(cfg: &Config, user: &User, pid: u32) -> io::Result<Vec<Step>> {
-    let steps = cfg.plan(user, pid)?;
+/// Create / chown / chmod / enable controllers / attach through a verified
+/// hierarchy handle. Re-applies ownership if the cgroup already exists.
+pub fn apply(cfg: &Config, hierarchy: &Hierarchy, user: &User, pid: u32) -> io::Result<Vec<Step>> {
+    let steps = cfg.plan(hierarchy, user, pid)?;
     for step in &steps {
-        cgfs::apply(&step.to_spec(), step.attach.then_some(pid))?;
+        step.cgroup
+            .apply(&step.to_spec(), step.attach.then_some(pid))?;
     }
     Ok(steps)
 }
@@ -141,28 +101,36 @@ mod tests {
         }
     }
 
+    fn test_hierarchy() -> (tempfile::TempDir, Hierarchy) {
+        let tmp = tempfile::tempdir().unwrap();
+        let hierarchy = unsafe { cgfs::Hierarchy::open_for_test(tmp.path()) }.unwrap();
+        (tmp, hierarchy)
+    }
+
     #[test]
-    fn rejects_paths_that_resolve_to_the_mount_root() {
+    fn rejects_paths_that_resolve_to_the_hierarchy_root() {
+        let (_tmp, hierarchy) = test_hierarchy();
         for path in [".", "", "/"] {
-            let err = step_for(Path::new("/sys/fs/cgroup"), &place(path), &user()).unwrap_err();
+            let err = step_for(&hierarchy, &place(path), &user()).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "path={path:?}");
         }
     }
 
     #[test]
     fn accepts_an_ordinary_place() {
-        let step = step_for(Path::new("/sys/fs/cgroup"), &place("users/{user}"), &user()).unwrap();
-        assert_eq!(step.path, Path::new("/sys/fs/cgroup/users/lu_zero"));
+        let (_tmp, hierarchy) = test_hierarchy();
+        let step = step_for(&hierarchy, &place("users/{user}"), &user()).unwrap();
+        assert_eq!(
+            step.cgroup.path().as_relative(),
+            std::path::Path::new("users/lu_zero")
+        );
     }
 
     #[test]
     fn rejects_a_trailing_dot_or_slash_past_a_real_segment() {
-        // Same reason cgfs::apply rejects this spelling: it makes the
-        // final component of the resulting path resolve as a directory
-        // at the syscall level, transparently following it if a
-        // delegatee has swapped it for a symlink.
+        let (_tmp, hierarchy) = test_hierarchy();
         for path in ["users/{user}/session/.", "users/{user}/session/"] {
-            let err = step_for(Path::new("/sys/fs/cgroup"), &place(path), &user()).unwrap_err();
+            let err = step_for(&hierarchy, &place(path), &user()).unwrap_err();
             assert_eq!(err.kind(), io::ErrorKind::InvalidInput, "path={path:?}");
         }
     }

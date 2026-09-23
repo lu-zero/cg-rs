@@ -2,6 +2,7 @@ use std::env;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use cgfs::Hierarchy;
 use pam_cgroup_rs::config::{Config, DEFAULT_CONFIG};
 use pam_cgroup_rs::place;
 use pam_cgroup_rs::user::User;
@@ -77,12 +78,19 @@ fn run() -> io::Result<()> {
                 Err(e) if e.kind() == io::ErrorKind::NotFound && cgrules.is_some() => None,
                 Err(e) => return Err(e),
             };
+            let hierarchy = match toml.as_ref() {
+                Some(config) => Hierarchy::open(&config.mount)?,
+                None => Hierarchy::discover()?,
+            };
             if cmd == "dry-run" {
                 if let Some(cfg) = &toml {
-                    for s in cfg.plan(&user, pid)? {
+                    for s in cfg.plan(&hierarchy, &user, pid)? {
                         println!(
                             "{path} uid={uid} gid={gid} mode={mode:o} file={file:o} subtree={st:?} attach={att} pid={pid}",
-                            path = s.path.display(),
+                            path = hierarchy
+                                .mount_path()
+                                .join(s.cgroup.path().as_relative())
+                                .display(),
                             uid = s.uid,
                             gid = s.gid,
                             mode = s.mode,
@@ -100,19 +108,21 @@ fn run() -> io::Result<()> {
                 }
             } else {
                 if let Some(cfg) = &toml {
-                    let steps = place::apply(cfg, &user, pid)?;
+                    let steps = place::apply(cfg, &hierarchy, &user, pid)?;
                     for s in steps {
-                        println!("{}", s.path.display());
+                        println!(
+                            "{}",
+                            hierarchy
+                                .mount_path()
+                                .join(s.cgroup.path().as_relative())
+                                .display()
+                        );
                     }
                 }
                 if let Some(r) = &cgrules {
-                    let mount = match &toml {
-                        Some(c) => c.mount.clone(),
-                        None => cgfs::find_mount()?,
-                    };
                     let dir = cgrules_dir_path(&cgrules, &cgrules_dir);
                     if let Some(path) = pam_cgroup_rs::classify::classify(
-                        &mount,
+                        &hierarchy,
                         std::path::Path::new(r),
                         dir.as_deref().map(std::path::Path::new),
                         cgconfig.as_deref().map(std::path::Path::new),

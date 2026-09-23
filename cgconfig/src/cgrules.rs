@@ -137,9 +137,9 @@ pub fn parse_cgrules_in(name: impl AsRef<str>, text: &str) -> Result<Vec<Rule>, 
         let dest_tok = &toks[2];
         let dest = terminated(dest_token, winnow::combinator::eof)
             .parse(dest_tok.as_str())
-            .map_err(|_| err(format!("bad destination {:?}", dest_tok)))?;
+            .map_err(|_| err(format!("bad destination {dest_tok:?}")))?;
         if dest.contains('\\') {
-            return Err(err(format!("bad destination {:?}", dest_tok)));
+            return Err(err(format!("bad destination {dest_tok:?}")));
         }
         rules.push(Rule {
             subject,

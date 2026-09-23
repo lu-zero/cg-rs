@@ -2,19 +2,18 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use cgconfig::model::{first_rule_names, ConfigFile, Identity};
 use cgconfig::{load_cgrules, parse_cgconfig_in, plan_destination};
-use cgfs::LeafSpec;
+use cgfs::{Cgroup, Hierarchy, LeafSpec};
 
 use crate::user::User;
 
 /// Match `user`/`pid` against the rules and attach. `Ok(None)` means no
 /// matching rule (or `ignore`); the TOML `[[place]]` attach still stands.
 pub fn classify(
-    mount: &Path,
+    hierarchy: &Hierarchy,
     cgrules: &Path,
     cgrules_d: Option<&Path>,
     cgconfig: Option<&Path>,
@@ -68,56 +67,42 @@ pub fn classify(
             format!("cgrules destination {dest:?} has illegal path components"),
         ));
     }
-    let spec = leaf_spec(&cfg, mount, &dest, &rule.destination.0, &identity).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("no group/template for cgrules destination {dest}"),
-        )
-    })?;
-    cgfs::apply(&spec, Some(pid))?;
-    Ok(Some(spec.path))
+    let (target, spec) = leaf_spec(hierarchy, &cfg, &dest, &rule.destination.0, &identity)?
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("no group/template for cgrules destination {dest}"),
+            )
+        })?;
+    let path = hierarchy.mount_path().join(target.path().as_relative());
+    target.apply(&spec, Some(pid))?;
+    Ok(Some(path))
 }
 
 fn leaf_spec(
+    hierarchy: &Hierarchy,
     cfg: &ConfigFile,
-    mount: &Path,
     dest: &str,
     template_name: &str,
     identity: &Identity,
-) -> Option<LeafSpec> {
-    let path = cgfs::join(mount, Path::new(dest));
+) -> io::Result<Option<(Cgroup, LeafSpec)>> {
     if let Some((plan, _)) = plan_destination(cfg, dest, template_name, identity) {
-        return Some(LeafSpec {
-            path,
-            uid: plan
-                .owner_uid
-                .as_deref()
-                .and_then(|n| cg_nss::resolve("user", n).ok()),
-            gid: plan
-                .owner_gid
-                .as_deref()
-                .and_then(|n| cg_nss::resolve("group", n).ok()),
-            dperm: plan.dir_mode,
-            fperm: plan.file_mode,
-            task_fperm: plan.tasks_file_mode,
-            task_uid: plan
-                .task_uid
-                .as_deref()
-                .and_then(|n| cg_nss::resolve("user", n).ok()),
-            task_gid: plan
-                .task_gid
-                .as_deref()
-                .and_then(|n| cg_nss::resolve("group", n).ok()),
-            subtree_control: plan.subtree_control,
-        });
+        let (target, spec) = cgcore::resolve_plan(hierarchy, &plan)?;
+        return Ok(Some((target, spec)));
     }
-    let procs = path.join("cgroup.procs");
+    let target = match hierarchy.at_path(dest) {
+        Ok(target) => target,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(e),
+    };
     let owned = identity.uid.parse::<u32>().ok().is_some_and(|uid| {
-        fs::metadata(&procs)
-            .map(|m| m.uid() == uid)
-            .unwrap_or(false)
+        target
+            .control("cgroup.procs")
+            .ok()
+            .and_then(|file| file.metadata().ok())
+            .is_some_and(|metadata| metadata.uid == uid)
     });
-    owned.then(|| LeafSpec::new(path))
+    Ok(owned.then(|| (target, LeafSpec::new())))
 }
 
 fn is_rt(pid: u32) -> bool {
@@ -126,28 +111,5 @@ fn is_rt(pid: u32) -> bool {
 }
 
 fn groups_of(user: &str, gid: u32) -> Vec<String> {
-    let Ok(cuser) = std::ffi::CString::new(user) else {
-        return Vec::new();
-    };
-    let mut gids: Vec<libc::gid_t> = vec![0; 32];
-    loop {
-        let mut n: libc::c_int = gids.len() as libc::c_int;
-        let rc = unsafe {
-            libc::getgrouplist(
-                cuser.as_ptr(),
-                gid as libc::gid_t,
-                gids.as_mut_ptr(),
-                &mut n,
-            )
-        };
-        if rc >= 0 {
-            gids.truncate(n as usize);
-            break;
-        }
-        if gids.len() > 4096 {
-            return Vec::new();
-        }
-        gids.resize(n.max(1) as usize * 2, 0);
-    }
-    gids.iter().map(|g| cg_nss::name_from_gid(*g)).collect()
+    cgcore::supplementary_groups(user, gid).unwrap_or_default()
 }

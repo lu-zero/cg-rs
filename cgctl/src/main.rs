@@ -2,14 +2,12 @@
 //! cgconfigparser/cgcreate/cgset/cgget/cgexec/cgclassify/cgdelete/lscgroup/
 //! cgsnapshot.
 
-mod nss;
 mod snapshot;
 
 use std::io::{self, Write};
-use std::path::{Component, Path, PathBuf};
 use std::process::ExitCode;
 
-use cgfs::LeafSpec;
+use cgfs::{Cgroup, Hierarchy};
 
 fn usage() -> ! {
     eprintln!(
@@ -54,8 +52,8 @@ fn run() -> io::Result<()> {
     }
 }
 
-fn mount() -> io::Result<PathBuf> {
-    cgfs::find_mount()
+fn hierarchy() -> io::Result<Hierarchy> {
+    Hierarchy::discover()
 }
 
 /// Pop the next argument as a path under the cgroup2 mount.
@@ -66,23 +64,20 @@ fn mount() -> io::Result<PathBuf> {
 /// admin action, not a destination a rule/template placeholder could ever
 /// silently resolve to. `get`/`set`/`classify`/`delete`/`exec`/`snapshot`
 /// all go through this.
-fn take_path(rest: &mut Vec<String>) -> io::Result<PathBuf> {
+fn take_path(rest: &mut Vec<String>) -> io::Result<Cgroup> {
     let raw = match rest.first() {
         Some(r) => r.clone(),
         None => usage(),
     };
     rest.remove(0);
-    let rel = raw.trim_start_matches('/');
-    if let Some(bad) = Path::new(rel)
-        .components()
-        .find(|c| matches!(c, Component::ParentDir | Component::Prefix(_)))
-    {
+    let rel = raw.strip_prefix('/').unwrap_or(&raw);
+    if rel.starts_with('/') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            format!("path {raw:?} contains illegal component {bad:?}"),
+            format!("path {raw:?} contains an empty component"),
         ));
     }
-    Ok(cgfs::join(&mount()?, Path::new(rel)))
+    hierarchy()?.at_path(rel)
 }
 
 // ------------------------------------------------------------------ config
@@ -94,7 +89,7 @@ fn config(mut rest: Vec<String>) -> io::Result<()> {
     let file = rest.pop().unwrap_or_else(|| usage());
     let text = std::fs::read_to_string(&file)?;
     let cfg = cgconfig::parse_cgconfig_in(&file, &text).map_err(io::Error::other)?;
-    let mount = mount()?;
+    let hierarchy = hierarchy()?;
     // Shallow-first so parents exist before children re-assert on them.
     let mut nodes = cfg.groups.clone();
     nodes.sort_by_key(|n| n.name.split('/').count());
@@ -102,38 +97,23 @@ fn config(mut rest: Vec<String>) -> io::Result<()> {
         if node.name == "." {
             continue; // the root cgroup exists by definition
         }
-        if !cgconfig::model::is_safe_relative_path(&node.name) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("group name {:?} has illegal path components", node.name),
-            ));
-        }
         let perm = cfg.effective_perm(node);
-        let spec = LeafSpec {
-            path: cgfs::join(&mount, Path::new(&node.name)),
-            uid: try_resolve("user", perm.admin.uid.as_deref()),
-            gid: try_resolve("group", perm.admin.gid.as_deref()),
-            dperm: perm.admin.dperm,
-            fperm: perm.admin.fperm,
-            task_fperm: perm.task.fperm,
-            task_uid: try_resolve("user", perm.task.uid.as_deref()),
-            task_gid: try_resolve("group", perm.task.gid.as_deref()),
+        let plan = cgconfig::LeafPlan {
+            path: node.name.clone(),
+            task_uid: perm.task.uid.clone(),
+            task_gid: perm.task.gid.clone(),
+            tasks_file_mode: perm.task.fperm,
+            owner_uid: perm.admin.uid.clone(),
+            owner_gid: perm.admin.gid.clone(),
+            dir_mode: perm.admin.dperm,
+            file_mode: perm.admin.fperm,
             subtree_control: node.controllers.clone(),
+            params: node.params.clone(),
         };
-        cgfs::apply(&spec, None)?;
+        cgcore::apply_plan(&hierarchy, &plan, None)?;
         println!("{}", node.name);
     }
     Ok(())
-}
-
-fn try_resolve(kind: &str, name: Option<&str>) -> Option<u32> {
-    name.and_then(|n| match nss::resolve(kind, n) {
-        Ok(id) => Some(id),
-        Err(e) => {
-            eprintln!("cgctl: {e}; leaving owner unchanged");
-            None
-        }
-    })
 }
 
 // ---------------------------------------------------------------------- ls
@@ -141,13 +121,18 @@ fn try_resolve(kind: &str, name: Option<&str>) -> Option<u32> {
 fn ls(rest: &mut Vec<String>) -> io::Result<()> {
     let base = match rest.first() {
         Some(_) => take_path(rest)?,
-        None => mount()?,
+        None => hierarchy()?.root(),
     };
     if !rest.is_empty() {
         usage();
     }
-    for g in cgfs::list_groups(&base)? {
-        println!("{}", g.display());
+    let base_path = base.path().as_relative();
+    for group in base.list_groups()? {
+        let relative = group
+            .as_relative()
+            .strip_prefix(base_path)
+            .unwrap_or_else(|_| group.as_relative());
+        println!("{}", relative.display());
     }
     Ok(())
 }
@@ -159,18 +144,20 @@ fn get(rest: &mut Vec<String>) -> io::Result<()> {
     let keys: Vec<String> = if rest.is_empty() {
         // Enumerate single-line writable knobs plus control files, similar to snapshot.
         let mut ks: Vec<String> = cgfs::CONTROL_FILES.iter().map(|s| s.to_string()).collect();
-        if let Ok(rd) = std::fs::read_dir(&path) {
-            for e in rd.filter_map(Result::ok) {
-                if e.file_type().map(|t| t.is_file()).unwrap_or(false) {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if !ks.contains(&name) && !name.starts_with("cgroup.") {
-                        if let Ok(text) = std::fs::read_to_string(e.path()) {
-                            if !text.contains('\n') || text.trim_end().lines().count() == 1 {
-                                // single-line knob; include
-                                ks.push(name);
-                            }
-                        }
-                    }
+        for entry in path.entries()? {
+            let name = entry.name.to_string_lossy().to_string();
+            if entry.kind == cgfs::EntryKind::Other
+                && !ks.contains(&name)
+                && !name.starts_with("cgroup.")
+            {
+                let Ok(control) = path.control(&name) else {
+                    continue;
+                };
+                let Ok(text) = control.read_string() else {
+                    continue;
+                };
+                if !text.contains('\n') || text.trim_end().lines().count() == 1 {
+                    ks.push(name);
                 }
             }
         }
@@ -178,22 +165,25 @@ fn get(rest: &mut Vec<String>) -> io::Result<()> {
     } else {
         rest.clone()
     };
-    for k in &keys {
-        if k.contains('/') || k.contains("..") {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                format!("bad key {k:?}"),
-            ));
-        }
-        dump(&path.join(k))?;
+    for key in &keys {
+        dump(&path, key)?;
     }
     Ok(())
 }
 
-fn dump(file: &Path) -> io::Result<()> {
-    match std::fs::read_to_string(file) {
+fn dump(cgroup: &Cgroup, key: &str) -> io::Result<()> {
+    match cgroup.control(key)?.read_string() {
         Ok(text) => {
-            print!("{}:\n{}\n", file.display(), text.trim_end());
+            print!(
+                "{}:\n{}\n",
+                cgroup
+                    .hierarchy()
+                    .mount_path()
+                    .join(cgroup.path().as_relative())
+                    .join(key)
+                    .display(),
+                text.trim_end()
+            );
             io::stdout().flush()
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()), // controller off
@@ -216,7 +206,7 @@ fn set(rest: &mut Vec<String>) -> io::Result<()> {
                 format!("bad key {k:?}"),
             ));
         }
-        cgfs::write_file(path.join(k), v)?;
+        path.control(k)?.write(v)?;
         println!("{k} <- {v}");
     }
     Ok(())
@@ -231,7 +221,7 @@ fn classify(rest: &mut Vec<String>) -> io::Result<()> {
     }
     for pid in rest {
         let pid: u32 = pid.parse().map_err(|_| bad_pid(pid))?;
-        cgfs::attach(&path, pid)?;
+        path.attach(pid)?;
     }
     Ok(())
 }
@@ -244,23 +234,17 @@ fn bad_pid(s: &str) -> io::Error {
 
 fn exec(rest: &mut Vec<String>) -> io::Result<()> {
     let path = take_path(rest)?;
-    let procs = path.join("cgroup.procs");
-    // CString::new allocates; must run in the parent, not between fork and exec.
-    let cstr = std::ffi::CString::new(procs.as_os_str().as_encoded_bytes())
-        .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "NUL in path"))?;
+    let procs = path.control("cgroup.procs")?.open_for_write()?;
+    let fd = procs.as_raw_fd();
+    use std::os::fd::AsRawFd;
     use std::os::unix::process::CommandExt;
     let err = unsafe {
         std::process::Command::new(rest.first().unwrap_or_else(|| usage()))
             .args(&rest[1..])
             .pre_exec(move || {
                 // Only async-signal-safe operations between fork and exec.
-                let fd = libc::open(cstr.as_ptr(), libc::O_WRONLY | libc::O_CLOEXEC);
-                if fd < 0 {
-                    return Err(io::Error::last_os_error());
-                }
                 let buf = b"0\n";
                 let ret = libc::write(fd, buf.as_ptr() as *const libc::c_void, buf.len());
-                libc::close(fd);
                 if ret != buf.len() as isize {
                     return Err(if ret < 0 {
                         io::Error::last_os_error()
@@ -287,9 +271,9 @@ fn delete(rest: &mut Vec<String>) -> io::Result<()> {
         usage();
     }
     if recursive {
-        cgfs::delete_tree(&path)
+        path.delete_tree()
     } else {
-        cgfs::delete_leaf(&path)
+        path.delete_leaf()
     }
 }
 
@@ -299,19 +283,12 @@ fn snapshot_cmd(mut rest: Vec<String>) -> io::Result<()> {
     if rest.len() > 1 {
         usage();
     }
-    let m = mount()?;
-    let rel = if rest.is_empty() {
-        PathBuf::from("/")
+    let root = if rest.is_empty() {
+        hierarchy()?.root()
     } else {
-        let abs = take_path(&mut rest)?;
-        let stripped = abs.strip_prefix(&m).unwrap_or(abs.as_path());
-        if stripped.as_os_str().is_empty() {
-            PathBuf::from("/")
-        } else {
-            stripped.to_path_buf()
-        }
+        take_path(&mut rest)?
     };
-    let cfg = snapshot::snapshot(&m, &rel)?;
+    let cfg = snapshot::snapshot(&root)?;
     // Render to a String first: `write!` on an `io::Write` target *panics*
     // if the Display impl itself returns Err (std::io::Write::write_fmt's
     // documented behaviour when the error didn't come from the

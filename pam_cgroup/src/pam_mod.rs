@@ -5,6 +5,8 @@ use std::fs;
 use std::io;
 use std::ptr;
 
+use cgfs::Hierarchy;
+
 use crate::args::PamArgs;
 use crate::classify;
 use crate::config::Config;
@@ -89,6 +91,21 @@ fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) ->
         }
     };
     let fail_closed = toml.as_ref().map(|c| c.fail_closed).unwrap_or(false);
+    let hierarchy = match toml.as_ref() {
+        Some(config) => Hierarchy::open(&config.mount),
+        None => Hierarchy::discover(),
+    };
+    let hierarchy = match hierarchy {
+        Ok(hierarchy) => hierarchy,
+        Err(e) => {
+            log_msg(LOG_ERR, &format!("cgroup hierarchy: {e}"));
+            return if fail_closed {
+                PAM_SESSION_ERR
+            } else {
+                PAM_SUCCESS
+            };
+        }
+    };
 
     let name = match pam_user(pamh) {
         Ok(n) => n,
@@ -111,7 +128,7 @@ fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) ->
     let pid = std::process::id();
 
     if let Some(cfg) = &toml {
-        match place::apply(cfg, &user, pid) {
+        match place::apply(cfg, &hierarchy, &user, pid) {
             Ok(steps) => {
                 log_msg(
                     LOG_INFO,
@@ -122,7 +139,7 @@ fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) ->
                         steps
                             .iter()
                             .find(|s| s.attach)
-                            .map(|s| s.path.display().to_string())
+                            .map(|s| s.cgroup.path().as_relative().display().to_string())
                             .unwrap_or_default()
                     ),
                 );
@@ -137,21 +154,9 @@ fn open_session(pamh: *const c_void, argc: c_int, argv: *const *const c_char) ->
     }
 
     if let Some(cgrules) = &args.cgrules {
-        let mount = toml
-            .as_ref()
-            .map(|c| c.mount.clone())
-            .or_else(|| cgfs::find_mount().ok());
-        let Some(mount) = mount else {
-            log_msg(LOG_ERR, "cgrules=: no cgroup2 mount");
-            return if fail_closed {
-                PAM_SESSION_ERR
-            } else {
-                PAM_SUCCESS
-            };
-        };
         let dir = args.rules_dir().map(std::path::Path::new);
         match classify::classify(
-            &mount,
+            &hierarchy,
             std::path::Path::new(cgrules),
             dir,
             args.cgconfig.as_deref().map(std::path::Path::new),
