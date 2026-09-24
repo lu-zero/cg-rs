@@ -1,0 +1,20 @@
+[workspace]
+resolver = "2"
+members = []
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/lu_zero/cg-rs"
+
+[workspace.dependencies]
+winnow = "1"
+miette = { version = "7", default-features = false }
+libc = "0.2"
+nix = { version = "0.31", default-features = false, features = ["user"] }
+rustix = { version = "1", features = ["fs", "process"] }
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+tempfile = "3"
