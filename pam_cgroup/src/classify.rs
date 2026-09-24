@@ -1,14 +1,132 @@
 //! Place the login pid using cgrules.conf (+ optional cgrules.d).
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use cgconfig::model::{first_rule_names, ConfigFile, Identity};
-use cgconfig::{load_cgrules, plan_destination};
+use cgconfig::{load_cgrules, plan_destination, CgError, CrError, FileError};
 use cgfs::{Cgroup, Hierarchy, LeafSpec};
+use miette::Diagnostic;
 
 use crate::user::User;
+
+/// Failure while classifying a process or loading its cgroup configuration.
+#[derive(Debug)]
+pub enum ClassifyError {
+    /// A filesystem or cgroup operation failed.
+    Io(io::Error),
+    /// The cgrules document could not be read or parsed.
+    Rules(FileError<CrError>),
+    /// The cgconfig document could not be read or parsed.
+    Config(FileError<CgError>),
+}
+
+impl From<io::Error> for ClassifyError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<FileError<CrError>> for ClassifyError {
+    fn from(error: FileError<CrError>) -> Self {
+        Self::Rules(error)
+    }
+}
+
+impl From<FileError<CgError>> for ClassifyError {
+    fn from(error: FileError<CgError>) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl fmt::Display for ClassifyError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Rules(error) => error.fmt(f),
+            Self::Config(error) => error.fmt(f),
+        }
+    }
+}
+
+impl StdError for ClassifyError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Rules(error) => Some(error),
+            Self::Config(error) => Some(error),
+        }
+    }
+}
+
+impl Diagnostic for ClassifyError {
+    fn code<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.code(),
+            Self::Config(error) => error.code(),
+        }
+    }
+
+    fn severity(&self) -> Option<miette::Severity> {
+        match self {
+            Self::Io(_) => Some(miette::Severity::Error),
+            Self::Rules(error) => error.severity(),
+            Self::Config(error) => error.severity(),
+        }
+    }
+
+    fn help<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.help(),
+            Self::Config(error) => error.help(),
+        }
+    }
+
+    fn url<'a>(&'a self) -> Option<Box<dyn fmt::Display + 'a>> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.url(),
+            Self::Config(error) => error.url(),
+        }
+    }
+
+    fn source_code(&self) -> Option<&dyn miette::SourceCode> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.source_code(),
+            Self::Config(error) => error.source_code(),
+        }
+    }
+
+    fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.labels(),
+            Self::Config(error) => error.labels(),
+        }
+    }
+
+    fn related<'a>(&'a self) -> Option<Box<dyn Iterator<Item = &'a dyn Diagnostic> + 'a>> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.related(),
+            Self::Config(error) => error.related(),
+        }
+    }
+
+    fn diagnostic_source(&self) -> Option<&dyn Diagnostic> {
+        match self {
+            Self::Io(_) => None,
+            Self::Rules(error) => error.diagnostic_source(),
+            Self::Config(error) => error.diagnostic_source(),
+        }
+    }
+}
 
 /// Match `user`/`pid` against the rules and attach. `Ok(None)` means no
 /// matching rule (or `ignore`); the TOML `[[place]]` attach still stands.
@@ -19,10 +137,10 @@ pub fn classify(
     cgconfig: Option<&Path>,
     user: &User,
     pid: u32,
-) -> io::Result<Option<PathBuf>> {
-    let rules = load_cgrules(cgrules, cgrules_d).map_err(io::Error::other)?;
+) -> Result<Option<PathBuf>, ClassifyError> {
+    let rules = load_cgrules(cgrules, cgrules_d)?;
     let cfg = match cgconfig {
-        Some(f) => ConfigFile::from_path(f).map_err(io::Error::other)?,
+        Some(f) => ConfigFile::from_path(f)?,
         None => ConfigFile::default(),
     };
     let comm = fs::read_to_string(format!("/proc/{pid}/comm"))
@@ -59,10 +177,10 @@ pub fn classify(
     let dest = identity.expand(&rule.destination);
     let dest = dest.trim_matches('/').to_owned();
     if !cgconfig::model::is_safe_relative_path(&dest) {
-        return Err(io::Error::new(
+        return Err(ClassifyError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("cgrules destination {dest:?} has illegal path components"),
-        ));
+        )));
     }
     let (target, spec) = leaf_spec(hierarchy, &cfg, &dest, &rule.destination.0, &identity)?
         .ok_or_else(|| {

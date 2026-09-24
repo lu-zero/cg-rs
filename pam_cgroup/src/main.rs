@@ -1,11 +1,71 @@
 use std::env;
+use std::error::Error as StdError;
+use std::fmt;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
 use cgfs::Hierarchy;
+use miette::Diagnostic;
+use pam_cgroup_rs::classify::ClassifyError;
 use pam_cgroup_rs::config::{Config, DEFAULT_CONFIG};
 use pam_cgroup_rs::place;
 use pam_cgroup_rs::user::User;
+
+#[derive(Debug)]
+enum AppError {
+    Io(io::Error),
+    Classify(ClassifyError),
+}
+
+type AppResult<T> = Result<T, AppError>;
+
+impl From<io::Error> for AppError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<ClassifyError> for AppError {
+    fn from(error: ClassifyError) -> Self {
+        Self::Classify(error)
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Classify(error) => error.fmt(f),
+        }
+    }
+}
+
+impl StdError for AppError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Classify(error) => Some(error),
+        }
+    }
+}
+
+fn render_error(error: &dyn Diagnostic) {
+    let handler =
+        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor())
+            .without_cause_chain();
+    let mut output = String::new();
+    handler
+        .render_report(&mut output, error)
+        .expect("rendering a miette report to a String cannot fail");
+    eprint!("{output}");
+}
+
+fn report_error(error: &AppError) {
+    match error {
+        AppError::Io(error) => eprintln!("pam-cgroup: {error}"),
+        AppError::Classify(error) => render_error(error),
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -31,13 +91,13 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("pam-cgroup: {e}");
+            report_error(&e);
             ExitCode::from(1)
         }
     }
 }
 
-fn run() -> io::Result<()> {
+fn run() -> AppResult<()> {
     let mut args = env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| usage());
     let mut config = None;
@@ -76,7 +136,7 @@ fn run() -> io::Result<()> {
             let toml = match Config::load(&config_path) {
                 Ok(c) => Some(c),
                 Err(e) if e.kind() == io::ErrorKind::NotFound && cgrules.is_some() => None,
-                Err(e) => return Err(e),
+                Err(e) => return Err(e.into()),
             };
             let hierarchy = match toml.as_ref() {
                 Some(config) => Hierarchy::open(&config.mount)?,

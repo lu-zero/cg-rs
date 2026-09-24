@@ -4,10 +4,70 @@
 
 mod snapshot;
 
+use std::error::Error as StdError;
+use std::fmt;
 use std::io::{self, Write};
 use std::process::ExitCode;
 
+use cgconfig::{CgError, FileError};
 use cgfs::{Cgroup, Hierarchy};
+use miette::Diagnostic;
+
+#[derive(Debug)]
+enum AppError {
+    Io(io::Error),
+    Config(FileError<CgError>),
+}
+
+type AppResult<T> = Result<T, AppError>;
+
+impl From<io::Error> for AppError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<FileError<CgError>> for AppError {
+    fn from(error: FileError<CgError>) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Config(error) => error.fmt(f),
+        }
+    }
+}
+
+impl StdError for AppError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Config(error) => Some(error),
+        }
+    }
+}
+
+fn render_error(error: &dyn Diagnostic) {
+    let handler =
+        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor())
+            .without_cause_chain();
+    let mut output = String::new();
+    handler
+        .render_report(&mut output, error)
+        .expect("rendering a miette report to a String cannot fail");
+    eprint!("{output}");
+}
+
+fn report_error(error: &AppError) {
+    match error {
+        AppError::Io(error) => eprintln!("cgctl: {error}"),
+        AppError::Config(error) => render_error(error),
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -29,13 +89,13 @@ fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("cgctl: {e}");
+            report_error(&e);
             ExitCode::from(1)
         }
     }
 }
 
-fn run() -> io::Result<()> {
+fn run() -> AppResult<()> {
     let mut args = std::env::args().skip(1);
     let cmd = args.next().unwrap_or_else(|| usage());
     let mut rest: Vec<String> = args.collect();
@@ -52,8 +112,8 @@ fn run() -> io::Result<()> {
     }
 }
 
-fn hierarchy() -> io::Result<Hierarchy> {
-    Hierarchy::discover()
+fn hierarchy() -> AppResult<Hierarchy> {
+    Ok(Hierarchy::discover()?)
 }
 
 /// Pop the next argument as a path under the cgroup2 mount.
@@ -64,7 +124,7 @@ fn hierarchy() -> io::Result<Hierarchy> {
 /// admin action, not a destination a rule/template placeholder could ever
 /// silently resolve to. `get`/`set`/`classify`/`delete`/`exec`/`snapshot`
 /// all go through this.
-fn take_path(rest: &mut Vec<String>) -> io::Result<Cgroup> {
+fn take_path(rest: &mut Vec<String>) -> AppResult<Cgroup> {
     let raw = match rest.first() {
         Some(r) => r.clone(),
         None => usage(),
@@ -72,22 +132,22 @@ fn take_path(rest: &mut Vec<String>) -> io::Result<Cgroup> {
     rest.remove(0);
     let rel = raw.strip_prefix('/').unwrap_or(&raw);
     if rel.starts_with('/') {
-        return Err(io::Error::new(
+        return Err(AppError::Io(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("path {raw:?} contains an empty component"),
-        ));
+        )));
     }
-    hierarchy()?.at_path(rel)
+    Ok(hierarchy()?.at_path(rel)?)
 }
 
 // ------------------------------------------------------------------ config
 
-fn config(mut rest: Vec<String>) -> io::Result<()> {
+fn config(mut rest: Vec<String>) -> AppResult<()> {
     if rest.len() != 1 {
         usage();
     }
     let file = rest.pop().unwrap_or_else(|| usage());
-    let cfg = cgconfig::ConfigFile::from_path(&file).map_err(io::Error::other)?;
+    let cfg = cgconfig::ConfigFile::from_path(&file)?;
     let hierarchy = hierarchy()?;
     // Shallow-first so parents exist before children re-assert on them.
     let mut nodes = cfg.groups.clone();
@@ -117,7 +177,7 @@ fn config(mut rest: Vec<String>) -> io::Result<()> {
 
 // ---------------------------------------------------------------------- ls
 
-fn ls(rest: &mut Vec<String>) -> io::Result<()> {
+fn ls(rest: &mut Vec<String>) -> AppResult<()> {
     let base = match rest.first() {
         Some(_) => take_path(rest)?,
         None => hierarchy()?.root(),
@@ -138,7 +198,7 @@ fn ls(rest: &mut Vec<String>) -> io::Result<()> {
 
 // --------------------------------------------------------------------- get
 
-fn get(rest: &mut Vec<String>) -> io::Result<()> {
+fn get(rest: &mut Vec<String>) -> AppResult<()> {
     let path = take_path(rest)?;
     let keys: Vec<String> = if rest.is_empty() {
         // Enumerate single-line writable knobs plus control files, similar to snapshot.
@@ -170,7 +230,7 @@ fn get(rest: &mut Vec<String>) -> io::Result<()> {
     Ok(())
 }
 
-fn dump(cgroup: &Cgroup, key: &str) -> io::Result<()> {
+fn dump(cgroup: &Cgroup, key: &str) -> AppResult<()> {
     match cgroup.control(key)?.read_string() {
         Ok(text) => {
             print!(
@@ -183,16 +243,16 @@ fn dump(cgroup: &Cgroup, key: &str) -> io::Result<()> {
                     .display(),
                 text.trim_end()
             );
-            io::stdout().flush()
+            Ok(io::stdout().flush()?)
         }
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()), // controller off
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
 // --------------------------------------------------------------------- set
 
-fn set(rest: &mut Vec<String>) -> io::Result<()> {
+fn set(rest: &mut Vec<String>) -> AppResult<()> {
     let path = take_path(rest)?;
     if rest.is_empty() {
         usage();
@@ -200,10 +260,10 @@ fn set(rest: &mut Vec<String>) -> io::Result<()> {
     for kv in rest {
         let (k, v) = kv.split_once('=').unwrap_or_else(|| usage());
         if k.contains('/') || k.contains("..") || k.is_empty() {
-            return Err(io::Error::new(
+            return Err(AppError::Io(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("bad key {k:?}"),
-            ));
+            )));
         }
         path.control(k)?.write(v)?;
         println!("{k} <- {v}");
@@ -213,7 +273,7 @@ fn set(rest: &mut Vec<String>) -> io::Result<()> {
 
 // ---------------------------------------------------------------- classify
 
-fn classify(rest: &mut Vec<String>) -> io::Result<()> {
+fn classify(rest: &mut Vec<String>) -> AppResult<()> {
     let path = take_path(rest)?;
     if rest.is_empty() {
         usage();
@@ -231,7 +291,7 @@ fn bad_pid(s: &str) -> io::Error {
 
 // -------------------------------------------------------------------- exec
 
-fn exec(rest: &mut Vec<String>) -> io::Result<()> {
+fn exec(rest: &mut Vec<String>) -> AppResult<()> {
     let path = take_path(rest)?;
     let procs = path.control("cgroup.procs")?.open_for_write()?;
     let fd = procs.as_raw_fd();
@@ -255,12 +315,12 @@ fn exec(rest: &mut Vec<String>) -> io::Result<()> {
             })
             .exec()
     };
-    Err(err) // exec only returns on failure
+    Err(err.into()) // exec only returns on failure
 }
 
 // ------------------------------------------------------------------ delete
 
-fn delete(rest: &mut Vec<String>) -> io::Result<()> {
+fn delete(rest: &mut Vec<String>) -> AppResult<()> {
     let recursive = matches!(rest.first(), Some(f) if f == "-r");
     if recursive {
         rest.remove(0);
@@ -270,15 +330,16 @@ fn delete(rest: &mut Vec<String>) -> io::Result<()> {
         usage();
     }
     if recursive {
-        path.delete_tree()
+        path.delete_tree()?;
     } else {
-        path.delete_leaf()
+        path.delete_leaf()?;
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------- snapshot
 
-fn snapshot_cmd(mut rest: Vec<String>) -> io::Result<()> {
+fn snapshot_cmd(mut rest: Vec<String>) -> AppResult<()> {
     if rest.len() > 1 {
         usage();
     }
@@ -291,8 +352,8 @@ fn snapshot_cmd(mut rest: Vec<String>) -> io::Result<()> {
     // Render to a String first: `write!` on an `io::Write` target *panics*
     // if the Display impl itself returns Err (std::io::Write::write_fmt's
     // documented behaviour when the error didn't come from the
-    // underlying stream) — not the clean io::Error this function's
-    // signature promises. A group/template name, controller name, or
+    // underlying stream) — not a normal io::Error from the output stream.
+    // A group/template name, controller name, or
     // param key can come straight from a live cgroup a delegatee
     // controls (see cgconfig::display's module doc comment), so this is
     // reachable, not hypothetical. `write!` on a `String` uses
@@ -309,5 +370,6 @@ fn snapshot_cmd(mut rest: Vec<String>) -> io::Result<()> {
     })?;
     let mut out = io::stdout().lock();
     writeln!(out, "# generated by cgctl snapshot")?;
-    write!(out, "{rendered}")
+    write!(out, "{rendered}")?;
+    Ok(())
 }

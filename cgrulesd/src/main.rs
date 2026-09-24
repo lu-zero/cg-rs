@@ -5,11 +5,83 @@
 mod enforce;
 
 use std::collections::HashSet;
+use std::error::Error as StdError;
+use std::fmt;
 use std::io;
 use std::path::PathBuf;
 
-use cgconfig::{load_cgrules, ConfigFile, Rules, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
+use cgconfig::{
+    load_cgrules, CgError, ConfigFile, CrError, FileError, Rules, DEFAULT_CGRULES,
+    DEFAULT_CGRULES_DIR,
+};
 use cgfs::Hierarchy;
+use miette::Diagnostic;
+
+#[derive(Debug)]
+enum AppError {
+    Io(io::Error),
+    Rules(FileError<CrError>),
+    Config(FileError<CgError>),
+}
+
+type AppResult<T> = Result<T, AppError>;
+
+impl From<io::Error> for AppError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+impl From<FileError<CrError>> for AppError {
+    fn from(error: FileError<CrError>) -> Self {
+        Self::Rules(error)
+    }
+}
+
+impl From<FileError<CgError>> for AppError {
+    fn from(error: FileError<CgError>) -> Self {
+        Self::Config(error)
+    }
+}
+
+impl fmt::Display for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => error.fmt(f),
+            Self::Rules(error) => error.fmt(f),
+            Self::Config(error) => error.fmt(f),
+        }
+    }
+}
+
+impl StdError for AppError {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            Self::Io(error) => Some(error),
+            Self::Rules(error) => Some(error),
+            Self::Config(error) => Some(error),
+        }
+    }
+}
+
+fn render_error(error: &dyn Diagnostic) {
+    let handler =
+        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor())
+            .without_cause_chain();
+    let mut output = String::new();
+    handler
+        .render_report(&mut output, error)
+        .expect("rendering a miette report to a String cannot fail");
+    eprint!("{output}");
+}
+
+fn report_error(error: &AppError) {
+    match error {
+        AppError::Io(error) => eprintln!("cgrulesd: {error}"),
+        AppError::Rules(error) => render_error(error),
+        AppError::Config(error) => render_error(error),
+    }
+}
 
 fn usage() -> ! {
     eprintln!(
@@ -71,22 +143,22 @@ fn main() -> std::process::ExitCode {
     match run(&opts) {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("cgrulesd: {e}");
+            report_error(&e);
             std::process::ExitCode::from(1)
         }
     }
 }
 
-fn load(opts: &Opts) -> io::Result<(Rules, ConfigFile)> {
-    let rules = load_cgrules(&opts.config, opts.config_dir.as_deref()).map_err(io::Error::other)?;
+fn load(opts: &Opts) -> AppResult<(Rules, ConfigFile)> {
+    let rules = load_cgrules(&opts.config, opts.config_dir.as_deref())?;
     let cfg = match &opts.cgconfig {
-        Some(f) => ConfigFile::from_path(f).map_err(io::Error::other)?,
+        Some(f) => ConfigFile::from_path(f)?,
         None => cgconfig::ConfigFile::default(),
     };
     Ok((rules, cfg))
 }
 
-fn run(opts: &Opts) -> io::Result<()> {
+fn run(opts: &Opts) -> AppResult<()> {
     // Destinations enforce_once created via a template match, tracked
     // across the daemon's whole lifetime so reap_idle_templates can
     // notice when one goes idle. A --once run never reaps in practice
@@ -115,10 +187,10 @@ fn run(opts: &Opts) -> io::Result<()> {
                 let hierarchy = match Hierarchy::discover() {
                     Ok(h) => h,
                     Err(e) => {
-                        eprintln!("cgrulesd: discover hierarchy: {e}");
                         if opts.once {
-                            return Err(e);
+                            return Err(e.into());
                         }
+                        report_error(&AppError::Io(e));
                         std::thread::sleep(std::time::Duration::from_secs(opts.interval));
                         continue;
                     }
@@ -135,10 +207,10 @@ fn run(opts: &Opts) -> io::Result<()> {
                 ) {
                     Ok(o) => o,
                     Err(e) => {
-                        eprintln!("cgrulesd: enforce: {e}");
                         if opts.once {
-                            return Err(e);
+                            return Err(e.into());
                         }
+                        report_error(&AppError::Io(e));
                         std::thread::sleep(std::time::Duration::from_secs(opts.interval));
                         continue;
                     }
@@ -158,7 +230,7 @@ fn run(opts: &Opts) -> io::Result<()> {
                 }
             }
             // A missing/invalid rules file must not kill the daemon.
-            Err(e) => eprintln!("cgrulesd: {e}"),
+            Err(e) => report_error(&e),
         }
         if opts.once {
             return Ok(());

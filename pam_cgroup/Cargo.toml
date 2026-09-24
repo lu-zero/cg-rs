@@ -30,6 +30,7 @@ toml = { workspace = true }
 cgfs = { workspace = true }
 cgconfig = { workspace = true }
 cgcore = { workspace = true }
+miette = { workspace = true, features = ["fancy"] }
 
 [dev-dependencies]
 cgfs = { workspace = true, features = ["test-utils"] }
