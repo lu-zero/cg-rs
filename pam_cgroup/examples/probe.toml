@@ -1,0 +1,21 @@
+# Throwaway hierarchy for `sudo pam-cgroup apply --config examples/probe.toml`.
+# Does not touch users/$USER/session.
+
+mount = "/sys/fs/cgroup"
+fail_closed = true
+
+[[place]]
+path = "users/pamcgroup-probe"
+uid = "{user}"
+gid = "{group}"
+mode = 0o775
+file_mode = 0o664
+subtree_control = ["cpu", "memory"]
+
+[[place]]
+path = "users/pamcgroup-probe/session"
+uid = "{user}"
+gid = "{group}"
+mode = 0o775
+file_mode = 0o664
+attach = true

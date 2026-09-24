@@ -1,0 +1,54 @@
+[package]
+name = "pam_cgroup"
+description = "PAM session module: place the login in a delegated cgroup v2 leaf"
+keywords = ["pam", "cgroup", "cgroupfs"]
+categories = ["os::unix-apis", "authentication"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "pam_cgroup_rs"
+crate-type = ["cdylib", "rlib"]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pam-cgroup"
+path = "src/main.rs"
+
+[features]
+default = []
+# Required by cargo-c so the crate is treated as a C ABI library.
+capi = []
+
+[dependencies]
+libc = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+cgfs = { workspace = true }
+cgconfig = { workspace = true }
+cgcore = { workspace = true }
+
+[dev-dependencies]
+cgfs = { workspace = true, features = ["test-utils"] }
+tempfile = { workspace = true }
+
+# cargo cinstall --prefix=/usr --libdir=/usr/lib64
+#   $libdir/security/pam_cgroup.so  (install_subdir = plugin dir)
+[package.metadata.capi]
+min_version = "0.10.25"
+
+[package.metadata.capi.header]
+# Dynamic module: no C header.
+enabled = false
+generation = false
+
+[package.metadata.capi.library]
+name = "pam_cgroup"
+install_subdir = "security"
+plugin = true
+# panic=unwind so `catch_unwind` at the PAM ABI boundary can turn a
+# panic into PAM_SESSION_ERR instead of aborting sshd/login's session
+# child. Unwind never crosses into C: pam_sm_open_session catches it.

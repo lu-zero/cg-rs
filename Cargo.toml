@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["cgconfig", "cgfs", "cgcore", "cgctl", "cgrulesd"]
+members = ["cgconfig", "cgfs", "cgcore", "cgctl", "cgrulesd", "pam_cgroup"]
 
 [workspace.package]
 version = "0.1.0"
