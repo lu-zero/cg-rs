@@ -10,7 +10,8 @@ use miette::Diagnostic;
 /// The parse variant retains the parser's [`miette::Diagnostic`] source and
 /// filename, so converting a file-backed parse into a report does not lose
 /// the snippet that made the error useful. The wrapper forwards the parser's
-/// diagnostic fields rather than rendering the parser as a second cause.
+/// diagnostic fields; renderers that include the standard cause chain can
+/// disable it to avoid displaying the forwarded diagnostic twice.
 #[derive(Debug)]
 pub enum FileError<E> {
     /// The file could not be read.
@@ -39,12 +40,9 @@ impl<E: fmt::Display> fmt::Display for FileError<E> {
 
 impl<E: Error + 'static> Error for FileError<E> {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
-        // The parser diagnostic is already forwarded by the `Diagnostic`
-        // implementation below. Expose only its own cause so miette does
-        // not render the same snippet twice.
         match self {
-            Self::Read { source, .. } => source.source(),
-            Self::Parse { source, .. } => source.source(),
+            Self::Read { source, .. } => Some(source),
+            Self::Parse { source, .. } => Some(source),
         }
     }
 }

@@ -12,10 +12,11 @@
 //! [`model::Identity`]. The workspace's `cgcore` crate supplies that layer
 //! for the Linux tools.
 //!
-//! [`ConfigFile`] and [`Rules`] implement [`std::str::FromStr`] for anonymous
-//! in-memory text. Use `from_path` when reading a file; it attaches the path
-//! to the [`miette::Diagnostic`] automatically. Named parsing of text that
-//! has already been read is intentionally left for a future extension.
+//! [`ConfigFile`] and [`Rules`] implement [`std::str::FromStr`] for in-memory
+//! text without a caller-supplied filename. Their diagnostics use a stable
+//! synthetic name; use `from_path` when reading a file to attach its real path.
+//! Named parsing of text that has already been read is intentionally left for
+//! a future extension.
 //!
 //! # Example
 //!

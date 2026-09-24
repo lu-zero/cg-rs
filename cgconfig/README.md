@@ -45,6 +45,7 @@ use miette::GraphicalReportHandler;
 let err = ConfigFile::from_path("my.conf").unwrap_err();
 let mut out = String::new();
 GraphicalReportHandler::new()
+    .without_cause_chain()
     .render_report(&mut out, &err)
     .unwrap();
 ```

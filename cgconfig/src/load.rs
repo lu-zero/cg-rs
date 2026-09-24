@@ -101,6 +101,25 @@ mod tests {
     }
 
     #[test]
+    fn main_read_error_keeps_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = tmp.path().join("missing.conf");
+        let err = load_cgrules(&main, None).unwrap_err();
+
+        assert!(matches!(&err, FileError::Read { path, .. } if path == &main));
+    }
+
+    #[test]
+    fn directory_read_error_keeps_the_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let main = write(tmp.path(), "cgrules.conf", "alice * dest-a\n");
+        let not_a_directory = write(tmp.path(), "not-a-directory", "");
+        let err = load_cgrules(&main, Some(&not_a_directory)).unwrap_err();
+
+        assert!(matches!(&err, FileError::Read { path, .. } if path == &not_a_directory));
+    }
+
+    #[test]
     fn ditto_does_not_span_files() {
         let tmp = tempfile::tempdir().unwrap();
         let main = write(tmp.path(), "cgrules.conf", "alice * dest-a\n");
@@ -109,5 +128,6 @@ mod tests {
         write(&d, "extra.conf", "% * dest-b\n");
         let err = load_cgrules(&main, Some(&d)).unwrap_err();
         assert!(matches!(err, FileError::Parse { .. }));
+        assert_eq!(err.path(), d.join("extra.conf"));
     }
 }

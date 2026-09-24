@@ -21,8 +21,9 @@ use winnow::token::{one_of, take_while};
 use crate::error::FileError;
 use crate::model::{Controllers, Rule, Subject, Template};
 
-/// Rule failure with byte span, position, and (through
-/// [`Rules::from_path`]) the named source for [miette] rendering.
+/// Rule failure with byte span, position, and source text for [miette]
+/// rendering. [`Rules::from_path`] supplies the real path; `FromStr` uses a
+/// stable synthetic name.
 ///
 /// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]

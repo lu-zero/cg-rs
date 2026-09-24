@@ -23,8 +23,9 @@ use winnow::token::{take_till, take_while};
 use crate::error::FileError;
 use crate::model::{ConfigFile, Mount, Node, Perm, PermSet};
 
-/// Parse failure with byte span, position, and (when parsing through
-/// [`ConfigFile::from_path`]) the named source text for [miette] rendering.
+/// Parse failure with byte span, position, and source text for [miette]
+/// rendering. [`ConfigFile::from_path`] supplies the real path; `FromStr` uses
+/// a stable synthetic name.
 ///
 /// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]
