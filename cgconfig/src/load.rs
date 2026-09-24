@@ -10,7 +10,8 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::cgrules::Rules;
+use crate::cgrules::{CrError, Rules};
+use crate::error::FileError;
 
 /// libcgroup's `CGRULES_CONF_FILE`.
 pub const DEFAULT_CGRULES: &str = "/etc/cgrules.conf";
@@ -18,23 +19,36 @@ pub const DEFAULT_CGRULES: &str = "/etc/cgrules.conf";
 pub const DEFAULT_CGRULES_DIR: &str = "/etc/cgrules.d";
 
 /// Parse `main`, then every eligible file in `dir` (if it exists).
-pub fn load_cgrules(main: &Path, dir: Option<&Path>) -> io::Result<Rules> {
-    let mut rules = load_one(main)?;
+///
+/// Read and parse failures retain the relevant path in [`FileError`].
+pub fn load_cgrules(main: &Path, dir: Option<&Path>) -> Result<Rules, FileError<CrError>> {
+    let mut rules = Rules::from_path(main)?;
     if let Some(dir) = dir {
         match fs::read_dir(dir) {
             Ok(entries) => {
-                let mut files: Vec<_> = entries
-                    .filter_map(Result::ok)
-                    .map(|e| e.path())
-                    .filter(|p| drop_in_file(p))
-                    .collect();
+                let mut files = Vec::new();
+                for entry in entries {
+                    let entry = entry.map_err(|source| FileError::Read {
+                        path: dir.to_path_buf(),
+                        source,
+                    })?;
+                    let path = entry.path();
+                    if drop_in_file(&path) {
+                        files.push(path);
+                    }
+                }
                 files.sort();
-                for f in files {
-                    rules.extend(load_one(&f)?);
+                for file in files {
+                    rules.extend(Rules::from_path(file)?);
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e),
+            Err(source) => {
+                return Err(FileError::Read {
+                    path: dir.to_path_buf(),
+                    source,
+                });
+            }
         }
     }
     Ok(rules)
@@ -48,12 +62,6 @@ fn drop_in_file(path: &Path) -> bool {
         return false;
     }
     path.is_file()
-}
-
-fn load_one(path: &Path) -> io::Result<Rules> {
-    let text = fs::read_to_string(path)?;
-    Rules::from_source(miette::NamedSource::new(path.display().to_string(), text))
-        .map_err(io::Error::other)
 }
 
 #[cfg(test)]
@@ -100,6 +108,6 @@ mod tests {
         fs::create_dir(&d).unwrap();
         write(&d, "extra.conf", "% * dest-b\n");
         let err = load_cgrules(&main, Some(&d)).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::Other);
+        assert!(matches!(err, FileError::Parse { .. }));
     }
 }

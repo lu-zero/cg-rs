@@ -87,9 +87,7 @@ fn config(mut rest: Vec<String>) -> io::Result<()> {
         usage();
     }
     let file = rest.pop().unwrap_or_else(|| usage());
-    let text = std::fs::read_to_string(&file)?;
-    let cfg = cgconfig::ConfigFile::from_source(miette::NamedSource::new(file, text))
-        .map_err(io::Error::other)?;
+    let cfg = cgconfig::ConfigFile::from_path(&file).map_err(io::Error::other)?;
     let hierarchy = hierarchy()?;
     // Shallow-first so parents exist before children re-assert on them.
     let mut nodes = cfg.groups.clone();

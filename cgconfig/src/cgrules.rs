@@ -8,18 +8,21 @@
 //!
 //! [`cgrules.conf(5)`]: https://manpages.debian.org/cgrules.conf.5
 
+use std::fs;
 use std::iter::FromIterator;
 use std::ops::Deref;
+use std::path::Path;
 use std::str::FromStr;
 
 use winnow::combinator::{alt, repeat, terminated};
 use winnow::prelude::*;
 use winnow::token::{one_of, take_while};
 
+use crate::error::FileError;
 use crate::model::{Controllers, Rule, Subject, Template};
 
 /// Rule failure with byte span, position, and (through
-/// [`Rules::from_source`]) the named source for [miette] rendering.
+/// [`Rules::from_path`]) the named source for [miette] rendering.
 ///
 /// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]
@@ -89,8 +92,21 @@ impl Rules {
         self.rules
     }
 
-    /// Parse a complete cgrules.conf document with a miette source.
-    pub fn from_source(source: miette::NamedSource<String>) -> Result<Self, CrError> {
+    /// Read and parse a cgrules.conf file, retaining its path in diagnostics.
+    ///
+    /// Read failures are returned as [`FileError::Read`], and syntax failures
+    /// as [`FileError::Parse`].
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, FileError<CrError>> {
+        let path = path.as_ref().to_path_buf();
+        let text = fs::read_to_string(&path).map_err(|source| FileError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        Self::from_source(miette::NamedSource::new(path.display().to_string(), text))
+            .map_err(|source| FileError::Parse { path, source })
+    }
+
+    fn from_source(source: miette::NamedSource<String>) -> Result<Self, CrError> {
         let text = source.inner().as_str();
         let mut rules: Vec<Rule> = Vec::new();
         let mut byte_offset = 0usize;

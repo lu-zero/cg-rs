@@ -10,6 +10,8 @@
 //!
 //! [`cgconfig.conf(5)`]: https://manpages.debian.org/cgconfig.conf.5
 
+use std::fs;
+use std::path::Path;
 use std::str::FromStr;
 
 use winnow::ascii::{multispace1, till_line_ending};
@@ -18,10 +20,11 @@ use winnow::error::StrContext;
 use winnow::prelude::*;
 use winnow::token::{take_till, take_while};
 
+use crate::error::FileError;
 use crate::model::{ConfigFile, Mount, Node, Perm, PermSet};
 
 /// Parse failure with byte span, position, and (when parsing through
-/// [`ConfigFile::from_source`]) the named source text for [miette] rendering.
+/// [`ConfigFile::from_path`]) the named source text for [miette] rendering.
 ///
 /// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]
@@ -85,8 +88,21 @@ impl FromStr for ConfigFile {
 }
 
 impl ConfigFile {
-    /// Parse a complete cgconfig.conf document with a miette source.
-    pub fn from_source(source: miette::NamedSource<String>) -> Result<Self, CgError> {
+    /// Read and parse a cgconfig.conf file, retaining its path in diagnostics.
+    ///
+    /// Read failures are returned as [`FileError::Read`], and syntax failures
+    /// as [`FileError::Parse`].
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, FileError<CgError>> {
+        let path = path.as_ref().to_path_buf();
+        let text = fs::read_to_string(&path).map_err(|source| FileError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        Self::from_source(miette::NamedSource::new(path.display().to_string(), text))
+            .map_err(|source| FileError::Parse { path, source })
+    }
+
+    fn from_source(source: miette::NamedSource<String>) -> Result<Self, CgError> {
         let text = source.inner();
         match config_file.parse(text) {
             Ok(cfg) => Ok(cfg),

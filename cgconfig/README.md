@@ -36,18 +36,13 @@ still mean "enable this controller for children".
 ## Errors are `miette::Diagnostic`
 
 Both error types carry byte spans, line/column, and a named copy of the
-source (`ConfigFile::from_source` / `Rules::from_source`), so consumers can
-render rich diagnostics:
+source when parsed with `from_path`, so consumers can render rich diagnostics:
 
 ```rust
 use cgconfig::ConfigFile;
 use miette::GraphicalReportHandler;
 
-let err = ConfigFile::from_source(miette::NamedSource::new(
-        "cgconfig.conf",
-        "group x { cpu { a = ; } }".to_owned(),
-    ))
-    .unwrap_err();
+let err = ConfigFile::from_path("my.conf").unwrap_err();
 let mut out = String::new();
 GraphicalReportHandler::new()
     .render_report(&mut out, &err)

@@ -12,8 +12,10 @@
 //! [`model::Identity`]. The workspace's `cgcore` crate supplies that layer
 //! for the Linux tools.
 //!
-//! [`ConfigFile`] and [`Rules`] implement [`std::str::FromStr`]. For a filename-aware
-//! diagnostic, pass a [`miette::NamedSource`] to their `from_source` methods.
+//! [`ConfigFile`] and [`Rules`] implement [`std::str::FromStr`] for anonymous
+//! in-memory text. Use `from_path` when reading a file; it attaches the path
+//! to the [`miette::Diagnostic`] automatically. Named parsing of text that
+//! has already been read is intentionally left for a future extension.
 //!
 //! # Example
 //!
@@ -36,6 +38,8 @@
 //! [`cgconfig.conf(5)`]: https://manpages.debian.org/cgconfig.conf.5
 //! [`cgrules.conf(5)`]: https://manpages.debian.org/cgrules.conf.5
 
+mod error;
+
 pub mod cgconfig;
 pub mod cgrules;
 pub mod display;
@@ -45,6 +49,7 @@ pub mod v2;
 
 pub use cgconfig::CgError;
 pub use cgrules::{CrError, Rules};
+pub use error::FileError;
 pub use load::{load_cgrules, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
 pub use model::{
     first_rule, first_rule_names, is_safe_relative_path, ConfigFile, Controllers, Identity, Mount,

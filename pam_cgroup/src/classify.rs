@@ -20,13 +20,9 @@ pub fn classify(
     user: &User,
     pid: u32,
 ) -> io::Result<Option<PathBuf>> {
-    let rules = load_cgrules(cgrules, cgrules_d)?;
+    let rules = load_cgrules(cgrules, cgrules_d).map_err(io::Error::other)?;
     let cfg = match cgconfig {
-        Some(f) => {
-            let t = fs::read_to_string(f)?;
-            ConfigFile::from_source(miette::NamedSource::new(f.display().to_string(), t))
-                .map_err(io::Error::other)?
-        }
+        Some(f) => ConfigFile::from_path(f).map_err(io::Error::other)?,
         None => ConfigFile::default(),
     };
     let comm = fs::read_to_string(format!("/proc/{pid}/comm"))

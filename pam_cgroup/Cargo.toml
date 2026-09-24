@@ -25,7 +25,6 @@ capi = []
 
 [dependencies]
 libc = { workspace = true }
-miette = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
 cgfs = { workspace = true }

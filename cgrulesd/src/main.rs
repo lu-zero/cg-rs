@@ -78,13 +78,9 @@ fn main() -> std::process::ExitCode {
 }
 
 fn load(opts: &Opts) -> io::Result<(Rules, ConfigFile)> {
-    let rules = load_cgrules(&opts.config, opts.config_dir.as_deref())?;
+    let rules = load_cgrules(&opts.config, opts.config_dir.as_deref()).map_err(io::Error::other)?;
     let cfg = match &opts.cgconfig {
-        Some(f) => {
-            let t = std::fs::read_to_string(f)?;
-            ConfigFile::from_source(miette::NamedSource::new(f.display().to_string(), t))
-                .map_err(io::Error::other)?
-        }
+        Some(f) => ConfigFile::from_path(f).map_err(io::Error::other)?,
         None => cgconfig::ConfigFile::default(),
     };
     Ok((rules, cfg))
