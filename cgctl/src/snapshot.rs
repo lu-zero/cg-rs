@@ -139,8 +139,9 @@ fn collect_params(cgroup: &Cgroup) -> Vec<(String, String, String)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgconfig::parse_cgconfig;
+    use cgconfig::ConfigFile;
     use std::fs;
+    use std::str::FromStr;
 
     #[test]
     fn snapshots_layout_owners_controllers() {
@@ -195,7 +196,7 @@ mod tests {
         assert!(!rendered.contains("cpu.stat"), "{rendered}");
 
         // The snapshot is itself valid config that plans back to the same tree.
-        let reparsed = parse_cgconfig(&rendered).unwrap();
+        let reparsed = ConfigFile::from_str(&rendered).unwrap();
         let leaf = reparsed.find_group("users/lu_zero/session").unwrap();
         let perm = reparsed.effective_perm(leaf);
         assert_eq!(perm.admin.dperm, Some(0o750));

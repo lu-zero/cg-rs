@@ -5,7 +5,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use cgconfig::model::{first_rule_names, ConfigFile, Identity};
-use cgconfig::{load_cgrules, parse_cgconfig_in, plan_destination};
+use cgconfig::{load_cgrules, plan_destination};
 use cgfs::{Cgroup, Hierarchy, LeafSpec};
 
 use crate::user::User;
@@ -24,7 +24,8 @@ pub fn classify(
     let cfg = match cgconfig {
         Some(f) => {
             let t = fs::read_to_string(f)?;
-            parse_cgconfig_in(f.display().to_string(), &t).map_err(io::Error::other)?
+            ConfigFile::from_source(miette::NamedSource::new(f.display().to_string(), t))
+                .map_err(io::Error::other)?
         }
         None => ConfigFile::default(),
     };

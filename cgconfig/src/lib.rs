@@ -12,16 +12,15 @@
 //! [`model::Identity`]. The workspace's `cgcore` crate supplies that layer
 //! for the Linux tools.
 //!
+//! [`ConfigFile`] and [`Rules`] implement [`std::str::FromStr`]. For a filename-aware
+//! diagnostic, pass a [`miette::NamedSource`] to their `from_source` methods.
+//!
 //! # Example
 //!
 //! ```
-//! use cgconfig::{parse_cgconfig, Identity, plan_template};
+//! use cgconfig::{ConfigFile, Identity, plan_template};
 //!
-//! let cfg = parse_cgconfig(
-//!     "template users/%u {\n  perm {\n    task { uid = %u; gid = users; fperm = 664; }\n\
-//!      admin { uid = root; dperm = 750; }\n  }\n  cpu { }\n}\n",
-//! )
-//! .unwrap();
+//! let cfg: ConfigFile = "template users/%u { perm { task { gid = students; } } cpu {} }".parse().unwrap();
 //! let me = Identity {
 //!     name: "laura".into(),
 //!     uid: "1001".into(),
@@ -29,7 +28,7 @@
 //! };
 //! let leaf = plan_template(&cfg, "users/%u", &me).unwrap();
 //! assert_eq!(leaf.path, "users/laura");
-//! assert_eq!(leaf.task_gid.as_deref(), Some("users"));
+//! assert_eq!(leaf.task_gid.as_deref(), Some("students"));
 //! assert_eq!(leaf.subtree_control, ["cpu"]);
 //! ```
 //!
@@ -44,8 +43,8 @@ pub mod load;
 pub mod model;
 pub mod v2;
 
-pub use cgconfig::{parse_cgconfig, parse_cgconfig_in, CgError};
-pub use cgrules::{parse_cgrules, parse_cgrules_in, CrError};
+pub use cgconfig::CgError;
+pub use cgrules::{CrError, Rules};
 pub use load::{load_cgrules, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
 pub use model::{
     first_rule, first_rule_names, is_safe_relative_path, ConfigFile, Controllers, Identity, Mount,

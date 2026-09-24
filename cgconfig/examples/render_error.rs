@@ -4,7 +4,7 @@
 //! cargo run --example render_error
 //! ```
 
-use cgconfig::parse_cgconfig_in;
+use cgconfig::ConfigFile;
 
 fn main() {
     let text = "# student layout\n\
@@ -16,7 +16,7 @@ fn main() {
                 \t\ttask { uid = %u; gid = students }\n\
                 \t}\n\
                 }\n";
-    match parse_cgconfig_in("cgconfig.conf", text) {
+    match ConfigFile::from_source(miette::NamedSource::new("cgconfig.conf", text.to_owned())) {
         Ok(_) => println!("ok"),
         Err(err) => {
             let handler = miette::GraphicalReportHandler::new_themed(

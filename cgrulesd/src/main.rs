@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::io;
 use std::path::PathBuf;
 
-use cgconfig::{load_cgrules, parse_cgconfig_in, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
+use cgconfig::{load_cgrules, ConfigFile, Rules, DEFAULT_CGRULES, DEFAULT_CGRULES_DIR};
 use cgfs::Hierarchy;
 
 fn usage() -> ! {
@@ -77,12 +77,13 @@ fn main() -> std::process::ExitCode {
     }
 }
 
-fn load(opts: &Opts) -> io::Result<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> {
+fn load(opts: &Opts) -> io::Result<(Rules, ConfigFile)> {
     let rules = load_cgrules(&opts.config, opts.config_dir.as_deref())?;
     let cfg = match &opts.cgconfig {
         Some(f) => {
             let t = std::fs::read_to_string(f)?;
-            parse_cgconfig_in(f.display().to_string(), &t).map_err(io::Error::other)?
+            ConfigFile::from_source(miette::NamedSource::new(f.display().to_string(), t))
+                .map_err(io::Error::other)?
         }
         None => cgconfig::ConfigFile::default(),
     };
@@ -103,7 +104,7 @@ fn run(opts: &Opts) -> io::Result<()> {
     // and re-inserts the correct entries on the very next pass via the
     // already-placed path, so clearing here costs nothing but a pass of
     // rediscovery.
-    let mut last_loaded: Option<(Vec<cgconfig::Rule>, cgconfig::ConfigFile)> = None;
+    let mut last_loaded: Option<(Rules, ConfigFile)> = None;
     loop {
         match load(opts) {
             Ok((rules, cfg)) => {

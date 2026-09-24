@@ -303,9 +303,10 @@ impl GroupCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cgconfig::{parse_cgconfig, parse_cgrules};
+    use cgconfig::{ConfigFile, Rules};
     use std::fs;
     use std::path::Path;
+    use std::str::FromStr;
 
     fn test_hierarchy(path: &Path) -> Hierarchy {
         unsafe { cgfs::Hierarchy::open_for_test(path) }.unwrap()
@@ -329,8 +330,8 @@ mod tests {
         let (uid, gid, uname) = me();
         prep_dir(&tmp.path().join(format!("students/{uname}")));
 
-        let rules = parse_cgrules("@students * students/%u").unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str("@students * students/%u").unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![ProcRow {
             pid: 4242,
             user: uname.clone(),
@@ -368,8 +369,8 @@ mod tests {
         let (uid, gid, uname) = me();
         prep_dir(&tmp.path().join(format!("students/{uname}")));
 
-        let rules = parse_cgrules("@students * students/%u").unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str("@students * students/%u").unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![ProcRow {
             pid: 4242,
             user: uname.clone(),
@@ -410,8 +411,8 @@ mod tests {
         // Owned by the test process itself, not by the row below.
         prep_dir(&tmp.path().join("existing"));
 
-        let rules = parse_cgrules("@students * existing").unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str("@students * existing").unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![ProcRow {
             pid: 4242,
             user: "someone_else".into(),
@@ -447,8 +448,8 @@ mod tests {
         // walk the destination out of the (sandboxed, here tmp) mount tree.
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
-        let rules = parse_cgrules(&format!("{uname} * apps/%p")).unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str(&format!("{uname} * apps/%p")).unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![ProcRow {
             pid: 9999,
             user: uname.clone(),
@@ -490,8 +491,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
         prep_dir(&tmp.path().join("placed"));
-        let rules = parse_cgrules("@students * placed").unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str("@students * placed").unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![
             ProcRow {
                 pid: 1,
@@ -543,8 +544,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let (uid, gid, uname) = me();
         prep_dir(&tmp.path().join("sshd"));
-        let rules = parse_cgrules(&format!("{uname}:sshd * sshd ignore")).unwrap();
-        let cfg = parse_cgconfig("").unwrap();
+        let rules = Rules::from_str(&format!("{uname}:sshd * sshd ignore")).unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         let rows = vec![ProcRow {
             pid: 99,
             user: uname,
@@ -577,8 +578,8 @@ mod tests {
         let cfg_text = format!(
             "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n cpu {{}}\n}}\n"
         );
-        let cfg = parse_cgconfig(&cfg_text).unwrap();
-        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+        let cfg = ConfigFile::from_str(&cfg_text).unwrap();
+        let rules = Rules::from_str(&format!("{uname} * students/%u")).unwrap();
 
         let rows = vec![ProcRow {
             pid: 777,
@@ -625,8 +626,8 @@ mod tests {
         let cfg_text = format!(
             "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n}}\n"
         );
-        let cfg = parse_cgconfig(&cfg_text).unwrap();
-        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+        let cfg = ConfigFile::from_str(&cfg_text).unwrap();
+        let rules = Rules::from_str(&format!("{uname} * students/%u")).unwrap();
         let target = tmp.path().join(format!("students/{uname}"));
         fs::create_dir_all(&target).unwrap();
         fs::write(target.join("cgroup.procs"), "").unwrap();
@@ -710,8 +711,8 @@ mod tests {
         let (uid, gid, uname) = me();
         let cfg_text =
             "template students/%u {\n perm { admin { uid = 0; gid = 0; dperm = 750; } }\n}\n";
-        let cfg = parse_cgconfig(cfg_text).unwrap();
-        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+        let cfg = ConfigFile::from_str(cfg_text).unwrap();
+        let rules = Rules::from_str(&format!("{uname} * students/%u")).unwrap();
 
         let rows = vec![ProcRow {
             pid: 782,
@@ -760,8 +761,8 @@ mod tests {
         let cfg_text = format!(
             "template students/%u {{\n perm {{ task {{ uid = {uid}; gid = {gid}; }} admin {{ dperm = 750; }} }}\n}}\n"
         );
-        let cfg = parse_cgconfig(&cfg_text).unwrap();
-        let rules = parse_cgrules(&format!("{uname} * students/%u")).unwrap();
+        let cfg = ConfigFile::from_str(&cfg_text).unwrap();
+        let rules = Rules::from_str(&format!("{uname} * students/%u")).unwrap();
 
         let dest_rel = format!("students/{uname}");
         let rows = vec![ProcRow {
@@ -800,8 +801,8 @@ mod tests {
         let cfg_text = format!(
             "group pool {{\n perm {{ admin {{ uid = {uid}; gid = {gid}; dperm = 750; }} }}\n cpu {{}}\n}}\n"
         );
-        let cfg = parse_cgconfig(&cfg_text).unwrap();
-        let rules = parse_cgrules(&format!("{uname} * pool")).unwrap();
+        let cfg = ConfigFile::from_str(&cfg_text).unwrap();
+        let rules = Rules::from_str(&format!("{uname} * pool")).unwrap();
 
         let rows = vec![ProcRow {
             pid: 779,

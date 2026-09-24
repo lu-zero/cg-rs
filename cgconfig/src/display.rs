@@ -149,12 +149,13 @@ fn write_set_block(f: &mut fmt::Formatter<'_>, kind: &str, s: &PermSet) -> fmt::
 #[cfg(test)]
 mod tests {
 
-    use crate::parse_cgconfig;
+    use crate::model::ConfigFile;
+    use std::str::FromStr;
 
     fn round_trip(text: &str) {
-        let cfg = parse_cgconfig(text).unwrap();
+        let cfg = ConfigFile::from_str(text).unwrap();
         let rendered = cfg.to_string();
-        let reparsed = parse_cgconfig(&rendered).unwrap_or_else(|e| {
+        let reparsed = ConfigFile::from_str(&rendered).unwrap_or_else(|e| {
             panic!("re-parse failed ({e}):\n--- source ---\n{text}\n--- rendered ---\n{rendered}")
         });
         assert_eq!(cfg, reparsed, "round trip diverged:\n{rendered}");
@@ -267,8 +268,8 @@ template students/%u {
 
     #[test]
     fn rendered_output_is_valid_conf_shape() {
-        let cfg =
-            parse_cgconfig("group a/b { perm { task { uid = x; } } cpu { p = 1; } }\n").unwrap();
+        let cfg = ConfigFile::from_str("group a/b { perm { task { uid = x; } } cpu { p = 1; } }\n")
+            .unwrap();
         let out = cfg.to_string();
         assert!(out.contains("group a/b {"));
         assert!(out.contains("\tcpu {"));

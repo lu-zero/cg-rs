@@ -10,8 +10,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use crate::cgrules::parse_cgrules_in;
-use crate::model::Rule;
+use crate::cgrules::Rules;
 
 /// libcgroup's `CGRULES_CONF_FILE`.
 pub const DEFAULT_CGRULES: &str = "/etc/cgrules.conf";
@@ -19,7 +18,7 @@ pub const DEFAULT_CGRULES: &str = "/etc/cgrules.conf";
 pub const DEFAULT_CGRULES_DIR: &str = "/etc/cgrules.d";
 
 /// Parse `main`, then every eligible file in `dir` (if it exists).
-pub fn load_cgrules(main: &Path, dir: Option<&Path>) -> io::Result<Vec<Rule>> {
+pub fn load_cgrules(main: &Path, dir: Option<&Path>) -> io::Result<Rules> {
     let mut rules = load_one(main)?;
     if let Some(dir) = dir {
         match fs::read_dir(dir) {
@@ -51,9 +50,10 @@ fn drop_in_file(path: &Path) -> bool {
     path.is_file()
 }
 
-fn load_one(path: &Path) -> io::Result<Vec<Rule>> {
+fn load_one(path: &Path) -> io::Result<Rules> {
     let text = fs::read_to_string(path)?;
-    parse_cgrules_in(path.display().to_string(), &text).map_err(io::Error::other)
+    Rules::from_source(miette::NamedSource::new(path.display().to_string(), text))
+        .map_err(io::Error::other)
 }
 
 #[cfg(test)]

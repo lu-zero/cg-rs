@@ -10,6 +10,8 @@
 //!
 //! [`cgconfig.conf(5)`]: https://manpages.debian.org/cgconfig.conf.5
 
+use std::str::FromStr;
+
 use winnow::ascii::{multispace1, till_line_ending};
 use winnow::combinator::{alt, cut_err, eof, fail, opt, repeat, terminated};
 use winnow::error::StrContext;
@@ -18,8 +20,8 @@ use winnow::token::{take_till, take_while};
 
 use crate::model::{ConfigFile, Mount, Node, Perm, PermSet};
 
-/// Parse failure with byte span, position, and (when parsing through the
-/// `_in` constructors) the named source text for [miette] rendering.
+/// Parse failure with byte span, position, and (when parsing through
+/// [`ConfigFile::from_source`]) the named source text for [miette] rendering.
 ///
 /// [miette]: https://docs.rs/miette
 #[derive(Clone, Debug)]
@@ -32,7 +34,7 @@ pub struct CgError {
     pub column: usize,
     pub msg: String,
     /// Boxed to keep `Result<_, CgError>` small.
-    source: Option<Box<miette::NamedSource<String>>>,
+    source: Box<miette::NamedSource<String>>,
 }
 
 impl std::fmt::Display for CgError {
@@ -53,7 +55,7 @@ impl miette::Diagnostic for CgError {
     }
 
     fn source_code(&self) -> Option<&dyn miette::SourceCode> {
-        self.source.as_deref().map(|s| s as &dyn miette::SourceCode)
+        Some(self.source.as_ref() as &dyn miette::SourceCode)
     }
 
     fn labels(&self) -> Option<Box<dyn Iterator<Item = miette::LabeledSpan> + '_>> {
@@ -74,19 +76,22 @@ impl miette::Diagnostic for CgError {
     }
 }
 
-/// Parse a complete cgconfig.conf document. The attached source is named
-/// `"cgconfig.conf"`; use [`parse_cgconfig_in`] to name it yourself.
-pub fn parse_cgconfig(text: &str) -> Result<ConfigFile, CgError> {
-    parse_cgconfig_in("cgconfig.conf", text)
+impl FromStr for ConfigFile {
+    type Err = CgError;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        Self::from_source(miette::NamedSource::new("cgconfig.conf", text.to_owned()))
+    }
 }
 
-/// Like [`parse_cgconfig`] but names the attached source for
-/// `miette::Diagnostic::source_code` rendering.
-pub fn parse_cgconfig_in(name: impl AsRef<str>, text: &str) -> Result<ConfigFile, CgError> {
-    let source = Box::new(miette::NamedSource::new(name, text.to_owned()));
-    match config_file.parse(text) {
-        Ok(cfg) => Ok(cfg),
-        Err(e) => Err(cg_error(&source, text, e.offset(), e.inner().to_string())),
+impl ConfigFile {
+    /// Parse a complete cgconfig.conf document with a miette source.
+    pub fn from_source(source: miette::NamedSource<String>) -> Result<Self, CgError> {
+        let text = source.inner();
+        match config_file.parse(text) {
+            Ok(cfg) => Ok(cfg),
+            Err(e) => Err(cg_error(&source, text, e.offset(), e.inner().to_string())),
+        }
     }
 }
 
@@ -117,7 +122,7 @@ fn cg_error(
         line: 1 + head.matches('\n').count(),
         column: head.chars().rev().take_while(|&c| c != '\n').count() + 1,
         msg,
-        source: Some(Box::new(source.clone())),
+        source: Box::new(source.clone()),
     }
 }
 
@@ -394,7 +399,7 @@ mod tests {
 
     #[test]
     fn parses_man_page_example_2() {
-        let cfg = parse_cgconfig(include_str!("../examples/daemons.cgconfig.conf")).unwrap();
+        let cfg = ConfigFile::from_str(include_str!("../examples/daemons.cgconfig.conf")).unwrap();
         assert_eq!(cfg.mounts.len(), 3);
         assert_eq!(
             cfg.mounts[0],
@@ -426,7 +431,7 @@ mod tests {
 
     #[test]
     fn parses_templates_and_root_group() {
-        let cfg = parse_cgconfig(include_str!("../examples/students.cgconfig.conf")).unwrap();
+        let cfg = ConfigFile::from_str(include_str!("../examples/students.cgconfig.conf")).unwrap();
         assert_eq!(cfg.groups.len(), 2, "students plus root");
         assert_eq!(cfg.templates.len(), 1);
 
@@ -447,7 +452,7 @@ mod tests {
     #[test]
     fn sections_in_any_order_and_comments_anywhere() {
         let text = "# leading comment\n\ngroup g {\n# why here\n cpu {}\n}\nmount {\ncpu=/x;\n}\n";
-        let cfg = parse_cgconfig(text).unwrap();
+        let cfg = ConfigFile::from_str(text).unwrap();
         assert_eq!(cfg.find_group("g").unwrap().name, "g");
         assert_eq!(cfg.mounts[0].path, "/x");
     }
@@ -455,7 +460,7 @@ mod tests {
     #[test]
     fn default_section_perm() {
         let text = "default { perm { task { uid = nobody; gid = nobody; fperm = 660; } } }\ngroup a { cpu {} }";
-        let cfg = parse_cgconfig(text).unwrap();
+        let cfg = ConfigFile::from_str(text).unwrap();
         let dp = cfg.default_perm.as_ref().unwrap();
         assert_eq!(dp.task.uid.as_deref(), Some("nobody"));
         assert_eq!(dp.task.fperm, Some(0o660));
@@ -466,7 +471,7 @@ mod tests {
 
     #[test]
     fn rejects_garbage_with_position() {
-        let e = parse_cgconfig("group x { cpu { a = ; } }").unwrap_err();
+        let e = ConfigFile::from_str("group x { cpu { a = ; } }").unwrap_err();
         assert_eq!(e.line, 1);
         assert!(e.column >= 16, "points at the bad token: {e}");
         assert!(e.msg.contains("entry"), "unexpected: {e}");
@@ -474,16 +479,16 @@ mod tests {
 
     #[test]
     fn empty_document_ok() {
-        assert_eq!(parse_cgconfig("").unwrap(), ConfigFile::default());
+        assert_eq!(ConfigFile::from_str("").unwrap(), ConfigFile::default());
         assert_eq!(
-            parse_cgconfig("# only a comment\n").unwrap(),
+            ConfigFile::from_str("# only a comment\n").unwrap(),
             ConfigFile::default()
         );
     }
 
     #[test]
     fn unknown_section_reports_line() {
-        let e = parse_cgconfig("# c\n\nmount {}\nbogus {}\n").unwrap_err();
+        let e = ConfigFile::from_str("# c\n\nmount {}\nbogus {}\n").unwrap_err();
         assert_eq!(e.line, 4, "{e}");
         assert!(e.msg.contains("`mount`"), "{e}");
     }

@@ -1,8 +1,9 @@
 //! miette integration: named sources, spans, and graphical rendering.
 //! Uses the `fancy` renderer (dev-dependency only).
 
-use cgconfig::{parse_cgconfig_in, parse_cgrules_in};
+use cgconfig::{ConfigFile, Rules};
 use miette::{Diagnostic, GraphicalReportHandler, GraphicalTheme};
+use std::str::FromStr;
 
 fn render(err: &dyn Diagnostic) -> String {
     let handler = GraphicalReportHandler::new_themed(GraphicalTheme::none());
@@ -14,7 +15,8 @@ fn render(err: &dyn Diagnostic) -> String {
 #[test]
 fn renders_cgconfig_snippet() {
     let text = "# c\n\nmount {}\nbogus {}\n";
-    let err = parse_cgconfig_in("test.conf", text).unwrap_err();
+    let err = ConfigFile::from_source(miette::NamedSource::new("test.conf", text.to_owned()))
+        .unwrap_err();
 
     assert_eq!(err.code().unwrap().to_string(), "cgconfig::parse");
     let (off, end) = (err.offset, err.end);
@@ -29,7 +31,8 @@ fn renders_cgconfig_snippet() {
 
 #[test]
 fn renders_cgrules_ditto_error() {
-    let err = parse_cgrules_in("rules.conf", "% * x/").unwrap_err();
+    let err = Rules::from_source(miette::NamedSource::new("rules.conf", "% * x/".to_owned()))
+        .unwrap_err();
     assert_eq!(err.code().unwrap().to_string(), "cgconfig::rules");
     let out = render(&err);
     assert!(out.contains("rules.conf"), "{out}");
@@ -38,7 +41,7 @@ fn renders_cgrules_ditto_error() {
 
 #[test]
 fn default_name_and_display() {
-    let err = cgconfig::parse_cgconfig("group x { cpu { a = ; } }").unwrap_err();
+    let err = ConfigFile::from_str("group x { cpu { a = ; } }").unwrap_err();
     // Source attached under the default name, for later rendering.
     assert!(err.source_code().is_some());
     let s = err.to_string();

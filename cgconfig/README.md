@@ -20,12 +20,14 @@ translation layer to **cgroup v2** leaves.
   `subtree_control`) for filesystem and application consumers.
 
 ```rust
-use cgconfig::{parse_cgconfig, parse_cgrules, first_rule, plan_template, Identity};
+use cgconfig::{ConfigFile, Identity, Rules, first_rule, plan_template};
 
-let cfg = parse_cgconfig("template users/%u { cpu {} }").unwrap();
+let cfg = "template users/%u { cpu {} }".parse::<ConfigFile>().unwrap();
+let rules = "laura * students/%u".parse::<Rules>().unwrap();
 let me = Identity { name: "laura".into(), ..Default::default() };
 let leaf = plan_template(&cfg, "users/%u", &me).unwrap();
 assert_eq!(leaf.path, "users/laura");
+assert_eq!(first_rule(&rules, &me.name, &[], None).is_some(), true);
 ```
 
 Empty controller blocks (`cpu {}`) count: under the unified hierarchy they
@@ -34,14 +36,17 @@ still mean "enable this controller for children".
 ## Errors are `miette::Diagnostic`
 
 Both error types carry byte spans, line/column, and a named copy of the
-source (`parse_cgconfig_in("my.conf", text)` to name it yourself), so
-consumers can render rich diagnostics:
+source (`ConfigFile::from_source` / `Rules::from_source`), so consumers can
+render rich diagnostics:
 
 ```rust
-use cgconfig::parse_cgconfig_in;
+use cgconfig::ConfigFile;
 use miette::GraphicalReportHandler;
 
-let err = parse_cgconfig_in("cgconfig.conf", "group x { cpu { a = ; } }")
+let err = ConfigFile::from_source(miette::NamedSource::new(
+        "cgconfig.conf",
+        "group x { cpu { a = ; } }".to_owned(),
+    ))
     .unwrap_err();
 let mut out = String::new();
 GraphicalReportHandler::new()

@@ -7,10 +7,10 @@
 //! expands `%` placeholders with an [`Identity`] supplied by the caller.
 //!
 //! ```no_run
-//! use cgconfig::{parse_cgconfig, parse_cgrules, Identity, first_rule, plan_template};
+//! use cgconfig::{ConfigFile, Identity, Rules, first_rule, plan_template};
 //!
-//! let cfg = parse_cgconfig("template students/%u { cpu { } perm { task { uid = %u; gid = students; } admin { dperm = 750; } } }").unwrap();
-//! let rules = parse_cgrules("@students * students/%u").unwrap();
+//! let cfg = "template students/%u { cpu { } perm { task { uid = %u; gid = students; } admin { dperm = 750; } } }".parse::<ConfigFile>().unwrap();
+//! let rules = "@students * students/%u".parse::<Rules>().unwrap();
 //! let me = Identity { name: "laura".into(), uid: "1001".into(),
 //!                     gid: "1500".into(), group: "students".into(),
 //!                     ..Default::default() };
@@ -110,7 +110,8 @@ fn plan_node_perm(perm: crate::model::Perm, node: &Node, id: &Identity) -> LeafP
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cgconfig::parse_cgconfig;
+    use crate::model::ConfigFile;
+    use std::str::FromStr;
 
     fn id() -> Identity {
         Identity {
@@ -126,7 +127,7 @@ mod tests {
     #[test]
     fn plans_template_leaf() {
         let text = include_str!("../examples/students.cgconfig.conf");
-        let cfg = parse_cgconfig(text).unwrap();
+        let cfg = ConfigFile::from_str(text).unwrap();
         let mut me = id();
         me.group = "students".into();
         let leaf = plan_template(&cfg, "students/%u", &me).unwrap();
@@ -147,7 +148,7 @@ mod tests {
 default { perm { admin { uid = root; gid = operator; dperm = 755; } } }
 group users/%u { memory { } }
 "#;
-        let cfg = parse_cgconfig(text).unwrap();
+        let cfg = ConfigFile::from_str(text).unwrap();
         let leaf = plan_group(&cfg, "users/%u", &id()).unwrap();
         assert_eq!(leaf.path, "users/lu_zero");
         assert_eq!(leaf.owner_gid.as_deref(), Some("operator"));
@@ -157,7 +158,7 @@ group users/%u { memory { } }
 
     #[test]
     fn missing_node_is_none() {
-        let cfg = parse_cgconfig("").unwrap();
+        let cfg = ConfigFile::from_str("").unwrap();
         assert!(plan_template(&cfg, "nope", &id()).is_none());
         assert!(plan_group(&cfg, "nope", &id()).is_none());
     }
