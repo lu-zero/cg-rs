@@ -19,7 +19,7 @@ release_agent plumbing.
 
 ## Development
 
-```text
+```sh
 just --list      # recipes
 just ci          # fmt + clippy + doc + test (the pre-commit gate set)
 just install     # PAM module ($libdir/security) + CLI binaries ($prefix/bin)
@@ -37,11 +37,5 @@ sudo); `PREFIX`/`LIBDIR` override `/usr`/`lib64`. `install` needs
 already on crates.io; `--dry-run` packages without uploading (dependents
 naturally stop at the first unpublished dependency), `--fast` skips the
 gate set.
-
-```text
-/sys/fs/cgroup/users/$USER            # empty, subtree_control, user-owned
-/sys/fs/cgroup/users/$USER/session    # login pid (pam_cgroup)
-/sys/fs/cgroup/users/$USER/jobacct-*  # accounting leaves (jobacct)
-```
 
 License: MIT OR Apache-2.0.
