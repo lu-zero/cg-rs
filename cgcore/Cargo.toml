@@ -1,0 +1,15 @@
+[package]
+name = "cgcore"
+description = "Identity resolution and cgroup v2 leaf application shared by cg-rs tools"
+keywords = ["cgroup", "cgroupv2", "nss", "cgconfig"]
+categories = ["os::unix-apis", "filesystem"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cgconfig = { workspace = true }
+cgfs = { workspace = true }
+nix = { workspace = true }

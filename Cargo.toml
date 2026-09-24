@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["cgconfig", "cgfs"]
+members = ["cgconfig", "cgfs", "cgcore"]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +12,7 @@ repository = "https://github.com/lu_zero/cg-rs"
 [workspace.dependencies]
 cgconfig = { path = "cgconfig", version = "0.1.0" }
 cgfs = { path = "cgfs", version = "0.1.0" }
+cgcore = { path = "cgcore", version = "0.1.0" }
 winnow = "1"
 miette = { version = "7", default-features = false }
 libc = "0.2"
