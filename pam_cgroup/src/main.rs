@@ -50,9 +50,10 @@ impl StdError for AppError {
 }
 
 fn render_error(error: &dyn Diagnostic) {
-    let handler =
-        miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::unicode_nocolor())
-            .without_cause_chain();
+    // Keep color for an interactive CLI, but let miette fall back for pipes,
+    // redirected stderr, and NO_COLOR.
+    let handler = miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::default())
+        .without_cause_chain();
     let mut output = String::new();
     handler
         .render_report(&mut output, error)

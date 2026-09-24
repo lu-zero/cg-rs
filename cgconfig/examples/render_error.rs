@@ -14,10 +14,9 @@ fn main() {
     match ConfigFile::from_path(path) {
         Ok(_) => println!("ok"),
         Err(err) => {
-            let handler = miette::GraphicalReportHandler::new_themed(
-                miette::GraphicalTheme::unicode_nocolor(),
-            )
-            .without_cause_chain();
+            let handler =
+                miette::GraphicalReportHandler::new_themed(miette::GraphicalTheme::default())
+                    .without_cause_chain();
             let mut out = String::new();
             handler.render_report(&mut out, &err).unwrap();
             println!("{out}");
