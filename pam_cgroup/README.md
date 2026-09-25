@@ -1,6 +1,8 @@
 # pam_cgroup
 
-[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
+[![Build Status](https://github.com/lu-zero/cg-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![crates.io](https://img.shields.io/crates/v/pam_cgroup.svg?version=0.1.0)](https://crates.io/crates/pam_cgroup)
+[![docs.rs](https://docs.rs/pam_cgroup/badge.svg?version=0.1.0)](https://docs.rs/pam_cgroup)
 
 PAM session module that puts the login into a **delegated cgroup v2**
 hierarchy via cgroupfs. No libcgroup, no systemd.

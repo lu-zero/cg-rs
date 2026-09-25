@@ -1,7 +1,7 @@
 # cgctl
 
-[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/cgctl.svg)](https://crates.io/crates/cgctl)
+[![Build Status](https://github.com/lu-zero/cg-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![crates.io](https://img.shields.io/crates/v/cgctl.svg?version=0.1.0)](https://crates.io/crates/cgctl)
 
 A busybox-style command-line interface for cgroup v2. It combines the
 configuration, inspection, classification, execution, deletion, and snapshot

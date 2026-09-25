@@ -1,7 +1,7 @@
 # cg-rs
 
 [![LICENSE](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue.svg)](LICENSE-MIT)
-[![Build Status](https://github.com/lu-zero/cg-rs/workflows/CI/badge.svg)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![Build Status](https://github.com/lu-zero/cg-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
 [![dependency status](https://deps.rs/repo/github/lu-zero/cg-rs/status.svg)](https://deps.rs/repo/github/lu-zero/cg-rs)
 
 Rust reimplementation of the useful parts of **libcgroup**, for
@@ -9,12 +9,12 @@ Rust reimplementation of the useful parts of **libcgroup**, for
 
 | crate | crates.io | docs | replaces | what it does |
 |---|---|---|---|---|
-| [`cgconfig`](cgconfig) | [![crates.io](https://img.shields.io/crates/v/cgconfig.svg?version=0.1.0)](https://crates.io/crates/cgconfig) | [![docs](https://docs.rs/cgconfig/badge.svg)](https://docs.rs/cgconfig) | `cgconfigparser`, config parsing | winnow parsers for `cgconfig.conf` + `cgrules.conf`, `%u`-style templates, miette diagnostics, v2 `LeafPlan` bridge |
-| [`cgfs`](cgfs) | [![crates.io](https://img.shields.io/crates/v/cgfs.svg?version=0.1.0)](https://crates.io/crates/cgfs) | [![docs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs) | libcg fs layer | verified hierarchy handles; create/delegate/attach/delete/walk; validated control-file read/write |
-| [`cgcore`](cgcore) | [![crates.io](https://img.shields.io/crates/v/cgcore.svg?version=0.1.0)](https://crates.io/crates/cgcore) | [![docs](https://docs.rs/cgcore/badge.svg)](https://docs.rs/cgcore) | shared application glue | NSS owner resolution and `cgconfig::LeafPlan` → verified `cgfs` application |
-| [`pam_cgroup`](pam_cgroup) | [![crates.io](https://img.shields.io/crates/v/pam_cgroup.svg?version=0.1.0)](https://crates.io/crates/pam_cgroup) | [![docs](https://docs.rs/pam_cgroup/badge.svg)](https://docs.rs/pam_cgroup) | `pam_cgroup.so` | PAM session module placing logins into delegated user leaves (`users/$USER/session`) |
-| [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg?version=0.1.0)](https://crates.io/crates/cgctl) | [docs](https://docs.rs/cgctl) | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
-| [`cgrulesd`](cgrulesd) | [![crates.io](https://img.shields.io/crates/v/cgrulesd.svg?version=0.1.0)](https://crates.io/crates/cgrulesd) | [docs](https://docs.rs/cgrulesd) | cgred / cgrulesengd | poll-based daemon keeping processes inside their cgrules destinations |
+| [`cgconfig`](cgconfig) | [![crates.io](https://img.shields.io/crates/v/cgconfig.svg?version=0.1.0)](https://crates.io/crates/cgconfig) | [![docs](https://docs.rs/cgconfig/badge.svg?version=0.1.0)](https://docs.rs/cgconfig) | `cgconfigparser`, config parsing | winnow parsers for `cgconfig.conf` + `cgrules.conf`, `%u`-style templates, miette diagnostics, v2 `LeafPlan` bridge |
+| [`cgfs`](cgfs) | [![crates.io](https://img.shields.io/crates/v/cgfs.svg?version=0.1.0)](https://crates.io/crates/cgfs) | [![docs](https://docs.rs/cgfs/badge.svg?version=0.1.0)](https://docs.rs/cgfs) | libcg fs layer | verified hierarchy handles; create/delegate/attach/delete/walk; validated control-file read/write |
+| [`cgcore`](cgcore) | [![crates.io](https://img.shields.io/crates/v/cgcore.svg?version=0.1.0)](https://crates.io/crates/cgcore) | [![docs](https://docs.rs/cgcore/badge.svg?version=0.1.0)](https://docs.rs/cgcore) | shared application glue | NSS owner resolution and `cgconfig::LeafPlan` → verified `cgfs` application |
+| [`pam_cgroup`](pam_cgroup) | [![crates.io](https://img.shields.io/crates/v/pam_cgroup.svg?version=0.1.0)](https://crates.io/crates/pam_cgroup) | [![docs](https://docs.rs/pam_cgroup/badge.svg?version=0.1.0)](https://docs.rs/pam_cgroup) | `pam_cgroup.so` | PAM session module placing logins into delegated user leaves (`users/$USER/session`) |
+| [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg?version=0.1.0)](https://crates.io/crates/cgctl) | — | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
+| [`cgrulesd`](cgrulesd) | [![crates.io](https://img.shields.io/crates/v/cgrulesd.svg?version=0.1.0)](https://crates.io/crates/cgrulesd) | — | cgred / cgrulesengd | poll-based daemon keeping processes inside their cgrules destinations |
 
 Not reproduced on purpose: v1 multi-hierarchy mounting, Python bindings,
 release_agent plumbing.

@@ -1,7 +1,7 @@
 # cgrulesd
 
-[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/cgrulesd.svg)](https://crates.io/crates/cgrulesd)
+[![Build Status](https://github.com/lu-zero/cg-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![crates.io](https://img.shields.io/crates/v/cgrulesd.svg?version=0.1.0)](https://crates.io/crates/cgrulesd)
 
 A poll-based cgroup v2 enforcement daemon for `cgrules.conf`. It is the
 unified-hierarchy successor to the libcgroup `cgred`/`cgrulesengd` tools and

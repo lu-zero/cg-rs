@@ -1,8 +1,8 @@
 # cgfs
 
-[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
-[![crates.io](https://img.shields.io/crates/v/cgfs.svg)](https://crates.io/crates/cgfs)
-[![docs.rs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs)
+[![Build Status](https://github.com/lu-zero/cg-rs/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![crates.io](https://img.shields.io/crates/v/cgfs.svg?version=0.1.0)](https://crates.io/crates/cgfs)
+[![docs.rs](https://docs.rs/cgfs/badge.svg?version=0.1.0)](https://docs.rs/cgfs)
 
 cgroupfs **v2** management primitives — the *write* half of the cgroup
 filesystem. Every mutating operation is rooted at a verified `Hierarchy` and
