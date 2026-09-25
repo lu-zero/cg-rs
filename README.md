@@ -13,8 +13,8 @@ Rust reimplementation of the useful parts of **libcgroup**, for
 | [`cgfs`](cgfs) | [![crates.io](https://img.shields.io/crates/v/cgfs.svg)](https://crates.io/crates/cgfs) | [![docs](https://docs.rs/cgfs/badge.svg)](https://docs.rs/cgfs) | libcg fs layer | verified hierarchy handles; create/delegate/attach/delete/walk; validated control-file read/write |
 | [`cgcore`](cgcore) | [![crates.io](https://img.shields.io/crates/v/cgcore.svg)](https://crates.io/crates/cgcore) | [![docs](https://docs.rs/cgcore/badge.svg)](https://docs.rs/cgcore) | shared application glue | NSS owner resolution and `cgconfig::LeafPlan` → verified `cgfs` application |
 | [`pam_cgroup`](pam_cgroup) | [![crates.io](https://img.shields.io/crates/v/pam_cgroup.svg)](https://crates.io/crates/pam_cgroup) | [![docs](https://docs.rs/pam_cgroup/badge.svg)](https://docs.rs/pam_cgroup) | `pam_cgroup.so` | PAM session module placing logins into delegated user leaves (`users/$USER/session`) |
-| [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg)](https://crates.io/crates/cgctl) | [![docs](https://docs.rs/cgctl/badge.svg)](https://docs.rs/cgctl) | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
-| [`cgrulesd`](cgrulesd) | [![crates.io](https://img.shields.io/crates/v/cgrulesd.svg)](https://crates.io/crates/cgrulesd) | [![docs](https://docs.rs/cgrulesd/badge.svg)](https://docs.rs/cgrulesd) | cgred / cgrulesengd | poll-based daemon keeping processes inside their cgrules destinations |
+| [`cgctl`](cgctl) | [![crates.io](https://img.shields.io/crates/v/cgctl.svg)](https://crates.io/crates/cgctl) | [docs](https://docs.rs/cgctl) | the cg\* tools | busybox CLI: `config` `ls` `get` `set` `classify` `exec` `delete` `snapshot` |
+| [`cgrulesd`](cgrulesd) | [![crates.io](https://img.shields.io/crates/v/cgrulesd.svg)](https://crates.io/crates/cgrulesd) | [docs](https://docs.rs/cgrulesd) | cgred / cgrulesengd | poll-based daemon keeping processes inside their cgrules destinations |
 
 Not reproduced on purpose: v1 multi-hierarchy mounting, Python bindings,
 release_agent plumbing.
