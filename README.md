@@ -1,6 +1,8 @@
 # cg-rs
 
-[![CI](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/lu_zero/cg-rs/actions/workflows/ci.yml)
+[![LICENSE](https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![Build Status](https://github.com/lu-zero/cg-rs/workflows/CI/badge.svg)](https://github.com/lu-zero/cg-rs/actions?query=workflow:CI)
+[![dependency status](https://deps.rs/repo/github/lu-zero/cg-rs/status.svg)](https://deps.rs/repo/github/lu-zero/cg-rs)
 
 Rust reimplementation of the useful parts of **libcgroup**, for
 **cgroup v2 / cgroupfs only** — no systemd, no libcgroup library.
@@ -38,4 +40,4 @@ already on crates.io; `--dry-run` packages without uploading (dependents
 naturally stop at the first unpublished dependency), `--fast` skips the
 gate set.
 
-License: MIT OR Apache-2.0.
+Licensed under either [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option.
