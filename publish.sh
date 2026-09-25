@@ -39,7 +39,7 @@ index_path() {
         1) echo "/1/$name" ;;
         2) echo "/2/$name" ;;
         3) echo "/3/${name:0:1}/$name" ;;
-        4) echo "/3/${name:0:2}/$name" ;;
+        4) echo "/${name:0:2}/${name:2:2}/$name" ;;
         *) echo "/${name:0:2}/${name:2:2}/$name" ;;
     esac
 }
